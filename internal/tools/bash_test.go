@@ -133,3 +133,15 @@ func TestBashInitialWorkdir(t *testing.T) {
 		t.Errorf("expected initial workdir %q in output, got: %s", tmp, text)
 	}
 }
+
+func TestBashEmptyCommand(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, 120)
+
+	for _, cmd := range []string{"", "  ", "\t\n"} {
+		_, _, err := handler(context.Background(), nil, BashArgs{Command: cmd})
+		if err == nil {
+			t.Errorf("expected error for empty command %q", cmd)
+		}
+	}
+}

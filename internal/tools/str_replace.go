@@ -65,10 +65,19 @@ func strReplaceHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.
 	}
 }
 
+const snippetContext = 4
+
 // contextSnippet returns a few lines of context around the given byte offset.
 func contextSnippet(content string, offset int) string {
-	if offset < 0 || offset >= len(content) {
-		return "(string deleted)"
+	if content == "" {
+		return ""
+	}
+	// Clamp offset to valid range so deletions at end of file still show context
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(content) {
+		offset = len(content) - 1
 	}
 
 	lines := strings.Split(content, "\n")
@@ -83,12 +92,11 @@ func contextSnippet(content string, offset int) string {
 		}
 	}
 
-	// Show 3 lines of context before and after
-	start := targetLine - 3
+	start := targetLine - snippetContext
 	if start < 0 {
 		start = 0
 	}
-	end := targetLine + 4
+	end := targetLine + snippetContext + 1
 	if end > len(lines) {
 		end = len(lines)
 	}

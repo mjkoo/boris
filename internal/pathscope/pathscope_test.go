@@ -227,3 +227,13 @@ func TestClearErrorMessages(t *testing.T) {
 		t.Errorf("expected 'deny pattern' error, got: %v", err)
 	}
 }
+
+func TestInvalidDenyPattern(t *testing.T) {
+	_, err := NewResolver(nil, []string{"[invalid"})
+	if err == nil {
+		t.Error("expected error for invalid deny pattern")
+	}
+	if !strings.Contains(err.Error(), "invalid deny pattern") {
+		t.Errorf("expected 'invalid deny pattern' error, got: %v", err)
+	}
+}

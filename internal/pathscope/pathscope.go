@@ -31,6 +31,11 @@ func NewResolver(allowDirs []string, denyPatterns []string) (*Resolver, error) {
 		}
 		canonical = append(canonical, resolved)
 	}
+	for _, p := range denyPatterns {
+		if !doublestar.ValidatePathPattern(p) {
+			return nil, fmt.Errorf("invalid deny pattern %q", p)
+		}
+	}
 	return &Resolver{allowDirs: canonical, denyPatterns: denyPatterns}, nil
 }
 
@@ -74,10 +79,12 @@ func (r *Resolver) Resolve(baseCwd string, path string) (string, error) {
 
 // matchesDeny checks if the resolved path or any of its parent directories
 // match a deny pattern. Returns the matching pattern and true if denied.
+// Match errors are treated as a deny (fail closed).
 func (r *Resolver) matchesDeny(resolved string) (string, bool) {
 	for _, pattern := range r.denyPatterns {
 		// Check the path itself
-		if matched, _ := doublestar.PathMatch(pattern, resolved); matched {
+		matched, err := doublestar.PathMatch(pattern, resolved)
+		if err != nil || matched {
 			return pattern, true
 		}
 		// Check parent directories (handles patterns like **/.git when
@@ -88,7 +95,8 @@ func (r *Resolver) matchesDeny(resolved string) (string, bool) {
 			if dir == "/" || dir == "." {
 				break
 			}
-			if matched, _ := doublestar.PathMatch(pattern, dir); matched {
+			matched, err = doublestar.PathMatch(pattern, dir)
+			if err != nil || matched {
 				return pattern, true
 			}
 		}

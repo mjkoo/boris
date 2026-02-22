@@ -24,6 +24,10 @@ type BashArgs struct {
 
 func bashHandler(sess *session.Session, defaultTimeout int) mcp.ToolHandlerFor[BashArgs, any] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, args BashArgs) (*mcp.CallToolResult, any, error) {
+		if strings.TrimSpace(args.Command) == "" {
+			return nil, nil, fmt.Errorf("command must not be empty")
+		}
+
 		timeout := args.Timeout
 		if timeout <= 0 {
 			timeout = defaultTimeout
