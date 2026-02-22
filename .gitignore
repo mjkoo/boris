@@ -1,0 +1,26 @@
+# Binary
+boris
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of `go cover`
+*.out
+
+# Go workspace file
+go.work.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
