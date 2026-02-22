@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Working directory persistence via pwd sentinel
 The bash tool SHALL track the working directory across calls within a session. Each command SHALL be executed as `cd <tracked_cwd> && <user_command> ; echo '<sentinel>' ; pwd`. The sentinel SHALL include a random nonce generated per session (e.g., `__BORIS_CWD_a3f7c210__`) to prevent collision with user output. After execution, the tool SHALL parse the sentinel and pwd output from the end of stdout to determine the new working directory. The sentinel and pwd lines SHALL be stripped from the returned stdout.
 

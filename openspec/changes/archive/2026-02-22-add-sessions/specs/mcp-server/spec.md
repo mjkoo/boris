@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Streamable HTTP transport
 When `--transport=http` (the default), the server SHALL use `mcp.NewStreamableHTTPHandler` to serve MCP over HTTP. The server SHALL listen on the port specified by `--port` (default 8080). The `getServer` factory passed to the handler SHALL create a new `mcp.Server` instance per MCP session, with tools registered via `tools.RegisterAll` bound to a new `session.Session`. Process-wide configuration (path resolver, shell path, max file size, tool config) SHALL be captured by the factory closure and reused across sessions.
 

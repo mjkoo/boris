@@ -73,6 +73,16 @@ type CLI struct {
 	AnthropicCompat bool        `help:"Expose combined str_replace_editor tool schema." env:"BORIS_ANTHROPIC_COMPAT"`
 }
 
+// serverConfig holds shared immutable values computed at startup.
+// The getServer factory closure captures this struct and creates
+// per-connection mcp.Server and session.Session instances.
+type serverConfig struct {
+	workdir  string
+	resolver *pathscope.Resolver
+	impl     *mcp.Implementation
+	toolsCfg tools.Config
+}
+
 func main() {
 	var cli CLI
 	kong.Parse(&cli,
@@ -103,43 +113,44 @@ func main() {
 	}
 	log.Printf("using shell: %s", shell)
 
-	// Create session
-	sess := session.New(workdir)
-
 	// Create path resolver
 	resolver, err := pathscope.NewResolver(cli.AllowDir, cli.DenyDir)
 	if err != nil {
 		log.Fatalf("invalid path scoping config: %v", err)
 	}
 
-	// Create MCP server
-	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "boris",
-		Version: versionInfo(),
-	}, nil)
-
-	// Register tools
-	tools.RegisterAll(server, resolver, sess, tools.Config{
-		NoBash:          cli.NoBash,
-		MaxFileSize:     maxFileSize,
-		DefaultTimeout:  cli.Timeout,
-		Shell:           shell,
-		AnthropicCompat: cli.AnthropicCompat,
-	})
+	cfg := serverConfig{
+		workdir:  workdir,
+		resolver: resolver,
+		impl: &mcp.Implementation{
+			Name:    "boris",
+			Version: versionInfo(),
+		},
+		toolsCfg: tools.Config{
+			NoBash:          cli.NoBash,
+			MaxFileSize:     maxFileSize,
+			DefaultTimeout:  cli.Timeout,
+			Shell:           shell,
+			AnthropicCompat: cli.AnthropicCompat,
+		},
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	switch cli.Transport {
 	case "http":
-		runHTTP(ctx, server, cli.Port)
+		runHTTP(ctx, cfg, cli.Port)
 	case "stdio":
-		runSTDIO(ctx, server)
+		runSTDIO(ctx, cfg)
 	}
 }
 
-func runHTTP(ctx context.Context, server *mcp.Server, port int) {
+func runHTTP(ctx context.Context, cfg serverConfig, port int) {
 	handler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server {
+		server := mcp.NewServer(cfg.impl, nil)
+		sess := session.New(cfg.workdir)
+		tools.RegisterAll(server, cfg.resolver, sess, cfg.toolsCfg)
 		return server
 	}, nil)
 
@@ -163,9 +174,14 @@ func runHTTP(ctx context.Context, server *mcp.Server, port int) {
 	}
 }
 
-func runSTDIO(ctx context.Context, server *mcp.Server) {
+func runSTDIO(ctx context.Context, cfg serverConfig) {
 	log.SetOutput(os.Stderr) // Keep stdout clean for MCP
 	log.Println("boris running on stdio")
+
+	server := mcp.NewServer(cfg.impl, nil)
+	sess := session.New(cfg.workdir)
+	tools.RegisterAll(server, cfg.resolver, sess, cfg.toolsCfg)
+
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
