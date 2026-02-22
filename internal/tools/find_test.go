@@ -554,6 +554,9 @@ func TestFindSearchRootOutsideAllowedDirs(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for path outside allow list")
 	}
+	if !hasErrorCode(r, ErrAccessDenied) {
+		t.Errorf("expected error code %s, got: %s", ErrAccessDenied, resultText(r))
+	}
 }
 
 // --- 6.1: Empty pattern returns IsError ---
@@ -568,9 +571,8 @@ func TestFindEmptyPatternError(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for empty pattern")
 	}
-	text := resultText(r)
-	if !strings.Contains(text, "pattern must not be empty") {
-		t.Errorf("expected empty pattern error, got: %s", text)
+	if !hasErrorCode(r, ErrInvalidInput) {
+		t.Errorf("expected error code %s, got: %s", ErrInvalidInput, resultText(r))
 	}
 }
 
@@ -586,9 +588,8 @@ func TestFindMalformedPatternError(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for malformed pattern")
 	}
-	text := resultText(r)
-	if !strings.Contains(text, "invalid glob pattern") {
-		t.Errorf("expected glob pattern error, got: %s", text)
+	if !hasErrorCode(r, ErrFindInvalidPattern) {
+		t.Errorf("expected error code %s, got: %s", ErrFindInvalidPattern, resultText(r))
 	}
 }
 
@@ -665,9 +666,8 @@ func TestFindInvalidTypeError(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for invalid type")
 	}
-	text := resultText(r)
-	if !strings.Contains(text, "invalid type") {
-		t.Errorf("expected invalid type error, got: %s", text)
+	if !hasErrorCode(r, ErrFindInvalidType) {
+		t.Errorf("expected error code %s, got: %s", ErrFindInvalidType, resultText(r))
 	}
 }
 

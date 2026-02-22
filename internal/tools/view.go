@@ -45,21 +45,21 @@ func viewHandler(sess *session.Session, resolver *pathscope.Resolver, maxFileSiz
 func doView(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64, path string, viewRange []int) (*mcp.CallToolResult, any, error) {
 	resolved, err := resolver.Resolve(sess.Cwd(), path)
 	if err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrAccessDenied, "path not allowed: %v", err)
 	}
 
 	info, err := os.Lstat(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return toolErr("path not found: %s", resolved)
+			return toolErr(ErrPathNotFound, "%s does not exist", resolved)
 		}
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not stat %s: %v", resolved, err)
 	}
 
 	if info.IsDir() {
 		text, err := listDirectory(resolved)
 		if err != nil {
-			return toolErr("%v", err)
+			return toolErr(ErrIO, "could not list directory %s: %v", resolved, err)
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
@@ -71,13 +71,13 @@ func doView(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int
 
 func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64) (*mcp.CallToolResult, any, error) {
 	if info.Size() > maxFileSize {
-		return toolErr("file size %d bytes exceeds maximum %d bytes", info.Size(), maxFileSize)
+		return toolErr(ErrFileTooLarge, "file %s is %d bytes, exceeds maximum %d bytes", path, info.Size(), maxFileSize)
 	}
 
 	// Binary/image detection: check first 512 bytes
 	f, err := os.Open(path)
 	if err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not open %s: %v", path, err)
 	}
 	defer f.Close()
 
@@ -89,11 +89,11 @@ func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64)
 	if mime, ok := detectImage(header, path); ok {
 		// Read the full file for image content
 		if _, err := f.Seek(0, 0); err != nil {
-			return toolErr("%v", err)
+			return toolErr(ErrIO, "could not seek %s: %v", path, err)
 		}
 		data, err := io.ReadAll(f)
 		if err != nil {
-			return toolErr("%v", err)
+			return toolErr(ErrIO, "could not read %s: %v", path, err)
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.ImageContent{
@@ -118,11 +118,11 @@ func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64)
 
 	// Read entire file
 	if _, err := f.Seek(0, 0); err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not seek %s: %v", path, err)
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not read %s: %v", path, err)
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -151,14 +151,14 @@ func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64)
 // a scanner to avoid loading the entire file into memory.
 func readFileRange(f *os.File, path string, start, end int) (*mcp.CallToolResult, any, error) {
 	if start < 1 {
-		return toolErr("invalid view_range: start must be >= 1, got %d", start)
+		return toolErr(ErrInvalidInput, "invalid view_range: start must be >= 1, got %d", start)
 	}
 	if start > end {
-		return toolErr("invalid view_range: start %d > end %d", start, end)
+		return toolErr(ErrInvalidInput, "invalid view_range: start %d > end %d", start, end)
 	}
 
 	if _, err := f.Seek(0, 0); err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not seek %s: %v", path, err)
 	}
 
 	scanner := bufio.NewScanner(f)
@@ -180,7 +180,7 @@ func readFileRange(f *os.File, path string, start, end int) (*mcp.CallToolResult
 	totalLines := lineNum
 
 	if start > totalLines {
-		return toolErr("invalid view_range: start %d exceeds total lines %d", start, totalLines)
+		return toolErr(ErrInvalidInput, "invalid view_range: start %d exceeds total lines %d in %s", start, totalLines, path)
 	}
 
 	// Clamp end to totalLines (already handled by scan stopping)

@@ -65,10 +65,10 @@ const findMaxOutputChars = 30000
 func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (*mcp.CallToolResult, any, error) {
 	// Validate pattern
 	if p.pattern == "" {
-		return toolErr("pattern must not be empty")
+		return toolErr(ErrInvalidInput, "pattern must not be empty")
 	}
 	if !doublestar.ValidatePattern(p.pattern) {
-		return toolErr("invalid glob pattern: %s", p.pattern)
+		return toolErr(ErrFindInvalidPattern, "invalid glob pattern: %s", p.pattern)
 	}
 
 	// Validate type filter
@@ -76,7 +76,7 @@ func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (
 	case "", "file", "directory":
 		// valid
 	default:
-		return toolErr("invalid type %q; valid values: file, directory", p.filterType)
+		return toolErr(ErrFindInvalidType, "invalid type %q; valid values: file, directory", p.filterType)
 	}
 
 	// Check path scoping on the search root
@@ -85,7 +85,7 @@ func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (
 		if p.path == "" {
 			resolvedRoot = sess.Cwd()
 		} else {
-			return toolErr("%v", err)
+			return toolErr(ErrAccessDenied, "path not allowed: %v", err)
 		}
 	}
 
@@ -94,7 +94,7 @@ func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (
 		if os.IsNotExist(err) {
 			return findNoFiles()
 		}
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not stat %s: %v", p.path, err)
 	}
 	if !info.IsDir() {
 		return findNoFiles()
@@ -210,7 +210,7 @@ func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (
 	}
 
 	if err := walkFn(resolvedRoot); err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not walk directory %s: %v", p.path, err)
 	}
 
 	if len(results) == 0 {

@@ -87,9 +87,8 @@ func TestGrepInvalidRegex(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for invalid regex")
 	}
-	text := resultText(r)
-	if !strings.Contains(text, "invalid regex") {
-		t.Errorf("expected regex error message, got: %s", text)
+	if !hasErrorCode(r, ErrGrepInvalidPattern) {
+		t.Errorf("expected error code %s, got: %s", ErrGrepInvalidPattern, resultText(r))
 	}
 }
 
@@ -105,9 +104,8 @@ func TestGrepEmptyPattern(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for empty pattern")
 	}
-	text := resultText(r)
-	if !strings.Contains(text, "pattern must not be empty") {
-		t.Errorf("expected empty pattern error, got: %s", text)
+	if !hasErrorCode(r, ErrInvalidInput) {
+		t.Errorf("expected error code %s, got: %s", ErrInvalidInput, resultText(r))
 	}
 }
 
@@ -213,6 +211,9 @@ func TestGrepInvalidOutputMode(t *testing.T) {
 	}
 	if !isErrorResult(r) {
 		t.Error("expected error for invalid output_mode")
+	}
+	if !hasErrorCode(r, ErrGrepInvalidOutputMode) {
+		t.Errorf("expected error code %s, got: %s", ErrGrepInvalidOutputMode, resultText(r))
 	}
 }
 
@@ -646,13 +647,8 @@ func TestGrepInvalidType(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for invalid type")
 	}
-	text := resultText(r)
-	if !strings.Contains(text, "unknown file type") {
-		t.Errorf("expected unknown type error, got: %s", text)
-	}
-	// Should list valid types
-	if !strings.Contains(text, "go") || !strings.Contains(text, "py") {
-		t.Errorf("expected valid types list, got: %s", text)
+	if !hasErrorCode(r, ErrInvalidInput) {
+		t.Errorf("expected error code %s, got: %s", ErrInvalidInput, resultText(r))
 	}
 }
 
@@ -884,6 +880,9 @@ func TestGrepSearchRootOutsideAllowList(t *testing.T) {
 	}
 	if !isErrorResult(r) {
 		t.Error("expected error for path outside allow list")
+	}
+	if !hasErrorCode(r, ErrAccessDenied) {
+		t.Errorf("expected error code %s, got: %s", ErrAccessDenied, resultText(r))
 	}
 }
 
@@ -1352,6 +1351,9 @@ func TestGrepNonexistentPath(t *testing.T) {
 	}
 	if !isErrorResult(r) {
 		t.Error("expected error for nonexistent path")
+	}
+	if !hasErrorCode(r, ErrPathNotFound) {
+		t.Errorf("expected error code %s, got: %s", ErrPathNotFound, resultText(r))
 	}
 }
 

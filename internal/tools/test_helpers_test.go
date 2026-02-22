@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"strings"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -19,6 +21,11 @@ func resultText(r *mcp.CallToolResult) string {
 // isErrorResult returns true if the CallToolResult has IsError set.
 func isErrorResult(r *mcp.CallToolResult) bool {
 	return r != nil && r.IsError
+}
+
+// hasErrorCode returns true if the result is an error with the given code prefix.
+func hasErrorCode(r *mcp.CallToolResult, code string) bool {
+	return isErrorResult(r) && strings.HasPrefix(resultText(r), "["+code+"]")
 }
 
 // testConfig returns a Config suitable for testing.

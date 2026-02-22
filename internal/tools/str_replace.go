@@ -27,37 +27,37 @@ func strReplaceHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.
 
 func doStrReplace(sess *session.Session, resolver *pathscope.Resolver, path, oldStr, newStr string, replaceAll bool) (*mcp.CallToolResult, any, error) {
 	if oldStr == "" {
-		return toolErr("old_str must not be empty")
+		return toolErr(ErrInvalidInput, "old_str must not be empty")
 	}
 
 	resolved, err := resolver.Resolve(sess.Cwd(), path)
 	if err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrAccessDenied, "path not allowed: %v", err)
 	}
 
 	info, err := os.Stat(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return toolErr("file not found: %s", resolved)
+			return toolErr(ErrPathNotFound, "%s does not exist", resolved)
 		}
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not stat %s: %v", resolved, err)
 	}
 
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not read %s: %v", resolved, err)
 	}
 	content := string(data)
 
 	count := strings.Count(content, oldStr)
 	if count == 0 {
-		return toolErr("string not found in %s", resolved)
+		return toolErr(ErrStrReplaceNotFound, "old_str not found in %s", resolved)
 	}
 
 	if replaceAll {
 		newContent := strings.ReplaceAll(content, oldStr, newStr)
 		if err := os.WriteFile(resolved, []byte(newContent), info.Mode().Perm()); err != nil {
-			return toolErr("failed to write file: %v", err)
+			return toolErr(ErrIO, "could not write %s: %v", resolved, err)
 		}
 		text := fmt.Sprintf("Replaced %d occurrences in %s", count, resolved)
 		return &mcp.CallToolResult{
@@ -66,7 +66,7 @@ func doStrReplace(sess *session.Session, resolver *pathscope.Resolver, path, old
 	}
 
 	if count > 1 {
-		return toolErr("found %d occurrences of the string in %s; match must be unique (use replace_all to replace all)", count, resolved)
+		return toolErr(ErrStrReplaceAmbiguous, "found %d occurrences in %s; match must be unique (use replace_all to replace all)", count, resolved)
 	}
 
 	offset := strings.Index(content, oldStr)
@@ -74,7 +74,7 @@ func doStrReplace(sess *session.Session, resolver *pathscope.Resolver, path, old
 
 	// Preserve file permissions
 	if err := os.WriteFile(resolved, []byte(newContent), info.Mode().Perm()); err != nil {
-		return toolErr("failed to write file: %v", err)
+		return toolErr(ErrIO, "could not write %s: %v", resolved, err)
 	}
 
 	// Build context snippet around the replacement

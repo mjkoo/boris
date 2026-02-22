@@ -212,7 +212,7 @@ func isBinaryHeader(header []byte) bool {
 func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (*mcp.CallToolResult, any, error) {
 	// Validate pattern
 	if p.pattern == "" {
-		return toolErr("pattern must not be empty")
+		return toolErr(ErrInvalidInput, "pattern must not be empty")
 	}
 
 	// Validate output_mode
@@ -223,7 +223,7 @@ func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (
 	case "content", "files_with_matches", "count":
 		// valid
 	default:
-		return toolErr("invalid output_mode %q; valid values: content, files_with_matches, count", p.outputMode)
+		return toolErr(ErrGrepInvalidOutputMode, "invalid output_mode %q; valid values: content, files_with_matches, count", p.outputMode)
 	}
 
 	// Validate type
@@ -232,7 +232,7 @@ func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (
 		var err error
 		typePatterns, err = resolveType(p.fileType)
 		if err != nil {
-			return toolErr("%v", err)
+			return toolErr(ErrInvalidInput, "invalid file type: %v", err)
 		}
 	}
 
@@ -247,7 +247,7 @@ func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (
 
 	re, err := regexp.Compile(patternStr)
 	if err != nil {
-		return toolErr("invalid regex pattern: %v", err)
+		return toolErr(ErrGrepInvalidPattern, "invalid regex pattern: %v", err)
 	}
 
 	// Resolve search path
@@ -265,27 +265,27 @@ func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (
 			// cwd should always be resolvable; use it directly
 			resolvedRoot = sess.Cwd()
 		} else {
-			return toolErr("%v", err)
+			return toolErr(ErrAccessDenied, "path not allowed: %v", err)
 		}
 	}
 
 	info, err := os.Lstat(resolvedRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return toolErr("path not found: %s", searchPath)
+			return toolErr(ErrPathNotFound, "%s does not exist", searchPath)
 		}
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not stat %s: %v", searchPath, err)
 	}
 
 	// If it's a symlink, resolve it
 	if info.Mode()&os.ModeSymlink != 0 {
 		resolvedRoot, err = filepath.EvalSymlinks(resolvedRoot)
 		if err != nil {
-			return toolErr("%v", err)
+			return toolErr(ErrIO, "could not resolve symlink %s: %v", searchPath, err)
 		}
 		info, err = os.Stat(resolvedRoot)
 		if err != nil {
-			return toolErr("%v", err)
+			return toolErr(ErrIO, "could not stat %s: %v", searchPath, err)
 		}
 	}
 
@@ -311,7 +311,7 @@ func grepSingleFile(re *regexp.Regexp, filePath, displayPath string, p grepParam
 				Content: []mcp.Content{&mcp.TextContent{Text: ""}},
 			}, nil, nil
 		}
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not open %s: %v", displayPath, err)
 	}
 	defer f.Close()
 
@@ -327,7 +327,7 @@ func grepSingleFile(re *regexp.Regexp, filePath, displayPath string, p grepParam
 
 	// Reset file for reading
 	if _, err := f.Seek(0, 0); err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not seek %s: %v", displayPath, err)
 	}
 
 	if p.multiline {
@@ -361,7 +361,7 @@ func grepFileLineByLine(re *regexp.Regexp, f *os.File, displayPath string, p gre
 func grepFileMultiline(re *regexp.Regexp, f *os.File, displayPath string, p grepParams) (*mcp.CallToolResult, any, error) {
 	data, err := readAllFile(f)
 	if err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not read %s: %v", displayPath, err)
 	}
 	content := string(data)
 
@@ -480,7 +480,8 @@ func buildFileResult(displayPath string, allLines []string, matchLineNums []int,
 		}, nil, nil
 	}
 
-	return toolErr("invalid output_mode %q", p.outputMode)
+	// unreachable: doGrep validates output_mode before calling buildFileResult
+	panic("unreachable: invalid output_mode " + p.outputMode)
 }
 
 // outputGroup represents a contiguous range of lines to output (match + context).
@@ -716,7 +717,7 @@ func grepDirectory(resolver *pathscope.Resolver, sess *session.Session, re *rege
 	}
 
 	if err := walkFn(rootPath); err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrIO, "could not walk directory %s: %v", rootPath, err)
 	}
 
 	// Build output

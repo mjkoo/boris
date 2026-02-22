@@ -35,7 +35,7 @@ func bashHandler(sess *session.Session, cfg Config) mcp.ToolHandlerFor[BashArgs,
 
 	return func(ctx context.Context, req *mcp.CallToolRequest, args BashArgs) (*mcp.CallToolResult, any, error) {
 		if strings.TrimSpace(args.Command) == "" {
-			return toolErr("command must not be empty")
+			return toolErr(ErrBashEmptyCommand, "command must not be empty")
 		}
 
 		timeoutMs := args.Timeout
@@ -67,15 +67,15 @@ func runForeground(ctx context.Context, req *mcp.CallToolRequest, sess *session.
 	// Use pipes for streaming output
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return toolErr("failed to create stdout pipe: %v", err)
+		return toolErr(ErrBashStartFailed, "could not create stdout pipe: %v", err)
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return toolErr("failed to create stderr pipe: %v", err)
+		return toolErr(ErrBashStartFailed, "could not create stderr pipe: %v", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return toolErr("failed to start command: %v", err)
+		return toolErr(ErrBashStartFailed, "could not start command: %v", err)
 	}
 
 	pgid := cmd.Process.Pid
@@ -170,7 +170,7 @@ func runBackground(sess *session.Session, cfg Config, cwd, command string) (*mcp
 	// Generate a unique task ID
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		return toolErr("failed to generate task ID: %v", err)
+		return toolErr(ErrIO, "could not generate task ID: %v", err)
 	}
 	taskID := hex.EncodeToString(b)
 
@@ -186,7 +186,7 @@ func runBackground(sess *session.Session, cfg Config, cwd, command string) (*mcp
 	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
-		return toolErr("failed to start background command: %v", err)
+		return toolErr(ErrBashStartFailed, "could not start background command: %v", err)
 	}
 
 	task := &session.BackgroundTask{
@@ -201,7 +201,7 @@ func runBackground(sess *session.Session, cfg Config, cwd, command string) (*mcp
 		// Kill the process we just started since we can't track it
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
-		return toolErr("%v", err)
+		return toolErr(ErrBashTaskLimit, "could not add background task: %v", err)
 	}
 
 	// Wait for completion in background goroutine
@@ -230,7 +230,7 @@ func taskOutputHandler(sess *session.Session) mcp.ToolHandlerFor[TaskOutputArgs,
 	return func(_ context.Context, _ *mcp.CallToolRequest, args TaskOutputArgs) (*mcp.CallToolResult, any, error) {
 		task, ok := sess.GetTask(args.TaskID)
 		if !ok {
-			return toolErr("task not found: %s", args.TaskID)
+			return toolErr(ErrBashTaskNotFound, "task not found: %s", args.TaskID)
 		}
 
 		var result strings.Builder

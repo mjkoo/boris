@@ -107,6 +107,9 @@ func TestViewRangeStartExceedsTotal(t *testing.T) {
 	if !isErrorResult(result) {
 		t.Error("start > totalLines should produce IsError")
 	}
+	if !hasErrorCode(result, ErrInvalidInput) {
+		t.Errorf("expected error code %s, got: %s", ErrInvalidInput, resultText(result))
+	}
 }
 
 func TestViewInvalidRange(t *testing.T) {
@@ -133,6 +136,9 @@ func TestViewInvalidRange(t *testing.T) {
 			}
 			if !isErrorResult(result) {
 				t.Error("expected IsError for invalid view_range")
+			}
+			if !hasErrorCode(result, ErrInvalidInput) {
+				t.Errorf("expected error code %s, got: %s", ErrInvalidInput, resultText(result))
 			}
 		})
 	}
@@ -443,6 +449,9 @@ func TestViewPathScopingEnforcement(t *testing.T) {
 	if !isErrorResult(result) {
 		t.Error("expected IsError for path scoping violation")
 	}
+	if !hasErrorCode(result, ErrAccessDenied) {
+		t.Errorf("expected error code %s, got: %s", ErrAccessDenied, resultText(result))
+	}
 }
 
 func TestViewFileNotFound(t *testing.T) {
@@ -457,6 +466,9 @@ func TestViewFileNotFound(t *testing.T) {
 	}
 	if !isErrorResult(result) {
 		t.Error("expected IsError for nonexistent file")
+	}
+	if !hasErrorCode(result, ErrPathNotFound) {
+		t.Errorf("expected error code %s, got: %s", ErrPathNotFound, resultText(result))
 	}
 }
 
@@ -476,7 +488,7 @@ func TestViewMaxFileSize(t *testing.T) {
 	if !isErrorResult(result) {
 		t.Error("expected IsError for file exceeding max size")
 	}
-	if !strings.Contains(resultText(result), "exceeds maximum") {
-		t.Errorf("expected size error message, got: %s", resultText(result))
+	if !hasErrorCode(result, ErrFileTooLarge) {
+		t.Errorf("expected error code %s, got: %s", ErrFileTooLarge, resultText(result))
 	}
 }

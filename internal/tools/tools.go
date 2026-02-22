@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -9,6 +10,42 @@ import (
 	"github.com/mjkoo/boris/internal/pathscope"
 	"github.com/mjkoo/boris/internal/session"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// Error code constants for structured error responses.
+// Cross-tool codes
+const (
+	ErrInvalidInput = "INVALID_INPUT"
+	ErrPathNotFound = "PATH_NOT_FOUND"
+	ErrAccessDenied = "ACCESS_DENIED"
+	ErrFileTooLarge = "FILE_TOO_LARGE"
+	ErrIO           = "IO_ERROR"
+)
+
+// Bash tool codes
+const (
+	ErrBashEmptyCommand = "BASH_EMPTY_COMMAND"
+	ErrBashStartFailed  = "BASH_START_FAILED"
+	ErrBashTaskLimit    = "BASH_TASK_LIMIT"
+	ErrBashTaskNotFound = "BASH_TASK_NOT_FOUND"
+)
+
+// Str_replace tool codes
+const (
+	ErrStrReplaceNotFound  = "STR_REPLACE_NOT_FOUND"
+	ErrStrReplaceAmbiguous = "STR_REPLACE_AMBIGUOUS"
+)
+
+// Grep tool codes
+const (
+	ErrGrepInvalidPattern    = "GREP_INVALID_PATTERN"
+	ErrGrepInvalidOutputMode = "GREP_INVALID_OUTPUT_MODE"
+)
+
+// Find tool codes
+const (
+	ErrFindInvalidPattern = "FIND_INVALID_PATTERN"
+	ErrFindInvalidType    = "FIND_INVALID_TYPE"
 )
 
 // typeSchemas provides custom JSON schema mappings for named types.
@@ -26,9 +63,11 @@ var typeSchemas = map[reflect.Type]*jsonschema.Schema{
 // toolErr returns a CallToolResult with IsError set to true.
 // Use this for operational errors (file not found, invalid input, etc.)
 // instead of returning Go errors, which are reserved for infrastructure failures.
-func toolErr(msg string, args ...any) (*mcp.CallToolResult, any, error) {
+// The code parameter must be one of the Err* constants defined above.
+func toolErr(code string, msg string, args ...any) (*mcp.CallToolResult, any, error) {
 	r := &mcp.CallToolResult{}
-	r.SetError(fmt.Errorf(msg, args...))
+	text := fmt.Sprintf("[%s] %s", code, fmt.Sprintf(msg, args...))
+	r.SetError(errors.New(text))
 	return r, nil, nil
 }
 
@@ -153,7 +192,7 @@ func strReplaceEditorHandler(sess *session.Session, resolver *pathscope.Resolver
 		case EditorCommandCreate:
 			return doCreateFile(sess, resolver, maxFileSize, args.Path, args.FileText)
 		default:
-			return toolErr("unknown command: %s (valid commands: view, str_replace, create)", args.Command)
+			return toolErr(ErrInvalidInput, "unknown command: %s (valid commands: view, str_replace, create)", args.Command)
 		}
 	}
 }

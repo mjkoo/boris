@@ -63,8 +63,8 @@ func TestStrReplaceNotFound(t *testing.T) {
 	if !isErrorResult(result) {
 		t.Error("expected IsError for string not found")
 	}
-	if !strings.Contains(resultText(result), "not found") {
-		t.Errorf("expected 'not found' error, got: %s", resultText(result))
+	if !hasErrorCode(result, ErrStrReplaceNotFound) {
+		t.Errorf("expected error code %s, got: %s", ErrStrReplaceNotFound, resultText(result))
 	}
 }
 
@@ -88,8 +88,8 @@ func TestStrReplaceMultipleOccurrences(t *testing.T) {
 	if !isErrorResult(result) {
 		t.Error("expected IsError for multiple occurrences")
 	}
-	if !strings.Contains(resultText(result), "2 occurrences") {
-		t.Errorf("expected occurrence count in error, got: %s", resultText(result))
+	if !hasErrorCode(result, ErrStrReplaceAmbiguous) {
+		t.Errorf("expected error code %s, got: %s", ErrStrReplaceAmbiguous, resultText(result))
 	}
 }
 
@@ -161,6 +161,9 @@ func TestStrReplaceAll(t *testing.T) {
 		if !isErrorResult(result) {
 			t.Error("expected IsError for no matches even with replace_all")
 		}
+		if !hasErrorCode(result, ErrStrReplaceNotFound) {
+			t.Errorf("expected error code %s, got: %s", ErrStrReplaceNotFound, resultText(result))
+		}
 	})
 
 	t.Run("replace_all false preserves uniqueness check", func(t *testing.T) {
@@ -177,6 +180,9 @@ func TestStrReplaceAll(t *testing.T) {
 		}
 		if !isErrorResult(result) {
 			t.Error("expected IsError for multiple occurrences without replace_all")
+		}
+		if !hasErrorCode(result, ErrStrReplaceAmbiguous) {
+			t.Errorf("expected error code %s, got: %s", ErrStrReplaceAmbiguous, resultText(result))
 		}
 	})
 }
@@ -204,6 +210,9 @@ func TestStrReplaceEmptyOldStr(t *testing.T) {
 		if !isErrorResult(result) {
 			t.Error("expected IsError for empty old_str")
 		}
+		if !hasErrorCode(result, ErrInvalidInput) {
+			t.Errorf("expected error code %s, got: %s", ErrInvalidInput, resultText(result))
+		}
 		data, _ := os.ReadFile(file)
 		if string(data) != original {
 			t.Errorf("file should be unchanged, got %q", data)
@@ -221,6 +230,9 @@ func TestStrReplaceEmptyOldStr(t *testing.T) {
 		}
 		if !isErrorResult(result) {
 			t.Error("expected IsError for empty old_str")
+		}
+		if !hasErrorCode(result, ErrInvalidInput) {
+			t.Errorf("expected error code %s, got: %s", ErrInvalidInput, resultText(result))
 		}
 		data, _ := os.ReadFile(file)
 		if string(data) != original {
@@ -270,6 +282,9 @@ func TestStrReplacePathScoping(t *testing.T) {
 	if !isErrorResult(result) {
 		t.Error("expected IsError for path scoping violation")
 	}
+	if !hasErrorCode(result, ErrAccessDenied) {
+		t.Errorf("expected error code %s, got: %s", ErrAccessDenied, resultText(result))
+	}
 }
 
 func TestStrReplaceFileNotFound(t *testing.T) {
@@ -288,5 +303,8 @@ func TestStrReplaceFileNotFound(t *testing.T) {
 	}
 	if !isErrorResult(result) {
 		t.Error("expected IsError for nonexistent file")
+	}
+	if !hasErrorCode(result, ErrPathNotFound) {
+		t.Errorf("expected error code %s, got: %s", ErrPathNotFound, resultText(result))
 	}
 }

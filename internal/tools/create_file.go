@@ -25,23 +25,23 @@ func createFileHandler(sess *session.Session, resolver *pathscope.Resolver, maxF
 
 func doCreateFile(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64, path, content string) (*mcp.CallToolResult, any, error) {
 	if int64(len(content)) > maxFileSize {
-		return toolErr("content size %d bytes exceeds maximum %d bytes", len(content), maxFileSize)
+		return toolErr(ErrFileTooLarge, "content is %d bytes, exceeds maximum %d bytes", len(content), maxFileSize)
 	}
 
 	resolved, err := resolver.Resolve(sess.Cwd(), path)
 	if err != nil {
-		return toolErr("%v", err)
+		return toolErr(ErrAccessDenied, "path not allowed: %v", err)
 	}
 
 	// Create parent directories
 	dir := filepath.Dir(resolved)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return toolErr("failed to create directories: %v", err)
+		return toolErr(ErrIO, "could not create directories for %s: %v", resolved, err)
 	}
 
 	// Write file (overwrites if exists)
 	if err := os.WriteFile(resolved, []byte(content), 0644); err != nil {
-		return toolErr("failed to write file: %v", err)
+		return toolErr(ErrIO, "could not write %s: %v", resolved, err)
 	}
 
 	text := fmt.Sprintf("Created %s (%d bytes)", resolved, len(content))

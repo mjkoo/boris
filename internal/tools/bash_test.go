@@ -192,6 +192,9 @@ func TestBashEmptyCommand(t *testing.T) {
 		if !isErrorResult(result) {
 			t.Errorf("expected IsError for empty command %q", cmd)
 		}
+		if !hasErrorCode(result, ErrBashEmptyCommand) {
+			t.Errorf("expected error code %s for empty command %q, got: %s", ErrBashEmptyCommand, cmd, resultText(result))
+		}
 	}
 }
 
@@ -336,8 +339,8 @@ func TestBashBackgroundCommand(t *testing.T) {
 		if !isErrorResult(result) {
 			t.Error("expected IsError when exceeding task limit")
 		}
-		if !strings.Contains(resultText(result), "limit") {
-			t.Errorf("expected limit error message, got: %s", resultText(result))
+		if !hasErrorCode(result, ErrBashTaskLimit) {
+			t.Errorf("expected error code %s, got: %s", ErrBashTaskLimit, resultText(result))
 		}
 	})
 }
@@ -415,6 +418,9 @@ func TestTaskOutput(t *testing.T) {
 		if !isErrorResult(result) {
 			t.Error("expected IsError after task cleanup")
 		}
+		if !hasErrorCode(result, ErrBashTaskNotFound) {
+			t.Errorf("expected error code %s after cleanup, got: %s", ErrBashTaskNotFound, resultText(result))
+		}
 	})
 
 	t.Run("unknown task_id", func(t *testing.T) {
@@ -425,8 +431,8 @@ func TestTaskOutput(t *testing.T) {
 		if !isErrorResult(result) {
 			t.Error("expected IsError for unknown task_id")
 		}
-		if !strings.Contains(resultText(result), "not found") {
-			t.Errorf("expected 'not found' error, got: %s", resultText(result))
+		if !hasErrorCode(result, ErrBashTaskNotFound) {
+			t.Errorf("expected error code %s, got: %s", ErrBashTaskNotFound, resultText(result))
 		}
 	})
 }
@@ -505,6 +511,9 @@ func TestBashIsErrorForOperationalErrors(t *testing.T) {
 	}
 	if !isErrorResult(result) {
 		t.Error("empty command should set IsError")
+	}
+	if !hasErrorCode(result, ErrBashEmptyCommand) {
+		t.Errorf("expected error code %s, got: %s", ErrBashEmptyCommand, resultText(result))
 	}
 
 	// Non-zero exit code should NOT be IsError

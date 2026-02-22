@@ -126,8 +126,8 @@ func TestCreateFileMaxSize(t *testing.T) {
 	if !isErrorResult(result) {
 		t.Error("expected IsError for exceeding max file size")
 	}
-	if !strings.Contains(resultText(result), "exceeds maximum") {
-		t.Errorf("expected size error, got: %s", resultText(result))
+	if !hasErrorCode(result, ErrFileTooLarge) {
+		t.Errorf("expected error code %s, got: %s", ErrFileTooLarge, resultText(result))
 	}
 }
 
@@ -146,5 +146,8 @@ func TestCreateFilePathScoping(t *testing.T) {
 	}
 	if !isErrorResult(result) {
 		t.Error("expected IsError for path scoping violation")
+	}
+	if !hasErrorCode(result, ErrAccessDenied) {
+		t.Errorf("expected error code %s, got: %s", ErrAccessDenied, resultText(result))
 	}
 }
