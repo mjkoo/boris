@@ -68,6 +68,24 @@ func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session
 		}, grepHandler(sess, resolver))
 	}
 
+	// Register find/Glob tool (always available, both modes, even with --no-bash)
+	if cfg.AnthropicCompat {
+		mcp.AddTool(server, &mcp.Tool{
+			Name: "Glob",
+			Description: `- Fast file pattern matching tool that works with any codebase size
+- Supports glob patterns like "**/*.js" or "src/**/*.ts"
+- Returns matching file paths sorted by modification time
+- Use this tool when you need to find files by name patterns
+- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead
+- You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful.`,
+		}, findCompatHandler(sess, resolver))
+	} else {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "find",
+			Description: "Find files by glob pattern. Returns matching file paths sorted by modification time (newest first). Supports doublestar patterns, brace expansion, and character classes. Respects .gitignore and skips .git/node_modules.",
+		}, findHandler(sess, resolver))
+	}
+
 	if cfg.AnthropicCompat {
 		editorSchema, err := jsonschema.For[StrReplaceEditorArgs](&jsonschema.ForOptions{
 			TypeSchemas: typeSchemas,
