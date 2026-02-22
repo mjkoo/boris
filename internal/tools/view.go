@@ -104,13 +104,11 @@ func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64)
 	}
 
 	// Check for binary (NUL bytes in header)
-	for _, b := range header {
-		if b == 0 {
-			text := fmt.Sprintf("Binary file (%s)", formatSize(info.Size()))
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{&mcp.TextContent{Text: text}},
-			}, nil, nil
-		}
+	if isBinaryHeader(header) {
+		text := fmt.Sprintf("Binary file (%s)", formatSize(info.Size()))
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: text}},
+		}, nil, nil
 	}
 
 	// For view_range requests, use efficient range reading

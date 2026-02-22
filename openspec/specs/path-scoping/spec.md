@@ -57,11 +57,19 @@ Deny entries SHALL support glob patterns using `bmatcuk/doublestar` syntax, incl
 - **THEN** the resolver denies access
 
 ### Requirement: File tools use the path resolver
-All file tools (`view`, `str_replace`, `create_file`) SHALL pass their path arguments through the resolver before performing any filesystem operations. If the resolver returns an error, the tool SHALL return that error to the caller without performing the operation.
+All file tools (`view`, `str_replace`, `create_file`, `grep`) SHALL pass their path arguments through the resolver before performing any filesystem operations. If the resolver returns an error, the tool SHALL return that error to the caller without performing the operation.
 
 #### Scenario: File tool respects deny
 - **WHEN** `view` is called with a path that matches a deny entry
 - **THEN** the tool returns an access denied error without reading the file
+
+#### Scenario: Grep search root respects allow list
+- **WHEN** `grep` is called with a `path` that resolves to a location outside the allowed directories
+- **THEN** the tool returns an access denied error without performing any search
+
+#### Scenario: Grep silently skips denied files during traversal
+- **WHEN** `grep` is searching a directory and encounters a file matching a deny pattern
+- **THEN** the file is silently skipped (no error, no result for that file)
 
 ### Requirement: Bash tool does not use the path resolver
 The `bash` tool SHALL NOT pass commands through the path resolver. Bash containment is best-effort only — the working directory is set inside an allowed directory, but shell commands can access any path. The `--no-bash` flag is the mechanism for strict file-only enforcement.

@@ -55,6 +55,19 @@ func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session
 		}, taskOutputHandler(sess))
 	}
 
+	// Register grep tool (always available, both modes, even with --no-bash)
+	if cfg.AnthropicCompat {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "grep",
+			Description: "Search file contents using regex patterns. Returns matching file paths (sorted by modification time), matching lines with context, or match counts.",
+		}, grepCompatHandler(sess, resolver))
+	} else {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "grep",
+			Description: "Search file contents using regex patterns. Returns matching file paths (sorted by modification time), matching lines with context, or match counts.",
+		}, grepHandler(sess, resolver))
+	}
+
 	if cfg.AnthropicCompat {
 		editorSchema, err := jsonschema.For[StrReplaceEditorArgs](&jsonschema.ForOptions{
 			TypeSchemas: typeSchemas,
