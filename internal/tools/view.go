@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,73 +15,116 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const maxViewLines = 2000
+const (
+	maxViewLines = 2000
+	maxLineChars = 2000
+)
+
+// excluded directories in directory listings
+var excludedDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+}
+
+// ViewRange is a custom type for view_range so that the JSON schema
+// generates {"type": "array"} instead of {"type": ["null", "array"]}.
+type ViewRange []int
 
 // ViewArgs is the input schema for the view tool.
 type ViewArgs struct {
-	Path      string `json:"path" jsonschema:"file or directory path to view"`
-	ViewRange []int  `json:"view_range,omitempty" jsonschema:"optional line range [start end] (1-indexed)"`
+	Path      string    `json:"path" jsonschema:"file or directory path to view"`
+	ViewRange ViewRange `json:"view_range,omitempty" jsonschema:"optional line range [start end] (1-indexed)"`
 }
 
 func viewHandler(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64) mcp.ToolHandlerFor[ViewArgs, any] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, args ViewArgs) (*mcp.CallToolResult, any, error) {
-		resolved, err := resolver.Resolve(sess.Cwd(), args.Path)
-		if err != nil {
-			return nil, nil, err
-		}
+		return doView(sess, resolver, maxFileSize, args.Path, args.ViewRange)
+	}
+}
 
-		info, err := os.Stat(resolved)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, nil, fmt.Errorf("path not found: %s", resolved)
-			}
-			return nil, nil, err
-		}
+func doView(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64, path string, viewRange []int) (*mcp.CallToolResult, any, error) {
+	resolved, err := resolver.Resolve(sess.Cwd(), path)
+	if err != nil {
+		return toolErr("%v", err)
+	}
 
-		var text string
-		if info.IsDir() {
-			text, err = listDirectory(resolved)
-		} else {
-			text, err = readFile(resolved, info, args.ViewRange, maxFileSize)
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return toolErr("path not found: %s", resolved)
 		}
-		if err != nil {
-			return nil, nil, err
-		}
+		return toolErr("%v", err)
+	}
 
+	if info.IsDir() {
+		text, err := listDirectory(resolved)
+		if err != nil {
+			return toolErr("%v", err)
+		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		}, nil, nil
 	}
+
+	return readFile(resolved, info, viewRange, maxFileSize)
 }
 
-func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64) (string, error) {
+func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64) (*mcp.CallToolResult, any, error) {
 	if info.Size() > maxFileSize {
-		return "", fmt.Errorf("file size %d bytes exceeds maximum %d bytes", info.Size(), maxFileSize)
+		return toolErr("file size %d bytes exceeds maximum %d bytes", info.Size(), maxFileSize)
 	}
 
-	// Binary detection: check first 512 bytes for NUL
+	// Binary/image detection: check first 512 bytes
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return toolErr("%v", err)
 	}
 	defer f.Close()
 
 	header := make([]byte, 512)
 	n, _ := f.Read(header)
 	header = header[:n]
+
+	// Check for image content
+	if mime, ok := detectImage(header, path); ok {
+		// Read the full file for image content
+		if _, err := f.Seek(0, 0); err != nil {
+			return toolErr("%v", err)
+		}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return toolErr("%v", err)
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.ImageContent{
+				Data:     data,
+				MIMEType: mime,
+			}},
+		}, nil, nil
+	}
+
+	// Check for binary (NUL bytes in header)
 	for _, b := range header {
 		if b == 0 {
-			return fmt.Sprintf("Binary file (%s)", formatSize(info.Size())), nil
+			text := fmt.Sprintf("Binary file (%s)", formatSize(info.Size()))
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: text}},
+			}, nil, nil
 		}
 	}
 
-	// Read entire file from the already-open handle
+	// For view_range requests, use efficient range reading
+	if len(viewRange) == 2 {
+		return readFileRange(f, path, viewRange[0], viewRange[1])
+	}
+
+	// Read entire file
 	if _, err := f.Seek(0, 0); err != nil {
-		return "", err
+		return toolErr("%v", err)
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return "", err
+		return toolErr("%v", err)
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -89,36 +134,94 @@ func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64)
 	}
 	totalLines := len(lines)
 
-	if len(viewRange) == 2 {
-		start, end := viewRange[0], viewRange[1]
-		if start < 1 {
-			return "", fmt.Errorf("invalid view_range: start must be >= 1, got %d", start)
-		}
-		if end > totalLines {
-			return "", fmt.Errorf("invalid view_range: end %d exceeds total lines %d", end, totalLines)
-		}
-		if start > end {
-			return "", fmt.Errorf("invalid view_range: start %d > end %d", start, end)
-		}
-		lines = lines[start-1 : end]
-		return formatLines(lines, start), nil
-	}
-
 	if totalLines > maxViewLines {
 		lines = lines[:maxViewLines]
 		text := formatLines(lines, 1)
 		text += fmt.Sprintf("\n[Truncated: file has %d lines. Use view_range to read specific sections.]", totalLines)
-		return text, nil
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: text}},
+		}, nil, nil
 	}
 
-	return formatLines(lines, 1), nil
+	text := formatLines(lines, 1)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+	}, nil, nil
+}
+
+// readFileRange reads a specific line range from an already-opened file using
+// a scanner to avoid loading the entire file into memory.
+func readFileRange(f *os.File, path string, start, end int) (*mcp.CallToolResult, any, error) {
+	if start < 1 {
+		return toolErr("invalid view_range: start must be >= 1, got %d", start)
+	}
+	if start > end {
+		return toolErr("invalid view_range: start %d > end %d", start, end)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		return toolErr("%v", err)
+	}
+
+	scanner := bufio.NewScanner(f)
+	lineNum := 0
+	var lines []string
+	for scanner.Scan() {
+		lineNum++
+		if lineNum >= start && lineNum <= end {
+			lines = append(lines, scanner.Text())
+		}
+		if lineNum > end {
+			break
+		}
+	}
+	// Continue scanning to get totalLines for validation
+	for scanner.Scan() {
+		lineNum++
+	}
+	totalLines := lineNum
+
+	if start > totalLines {
+		return toolErr("invalid view_range: start %d exceeds total lines %d", start, totalLines)
+	}
+
+	// Clamp end to totalLines (already handled by scan stopping)
+	text := formatLines(lines, start)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+	}, nil, nil
+}
+
+// detectImage checks if the header bytes represent an image format.
+// Uses net/http.DetectContentType for magic byte sniffing, with SVG
+// extension fallback since SVG is text-based.
+func detectImage(header []byte, path string) (string, bool) {
+	if len(header) > 0 {
+		mime := http.DetectContentType(header)
+		if strings.HasPrefix(mime, "image/") {
+			return mime, true
+		}
+	}
+	// SVG fallback: text-based format not detected by magic bytes
+	if strings.ToLower(filepath.Ext(path)) == ".svg" {
+		return "image/svg+xml", true
+	}
+	return "", false
+}
+
+// truncateLine caps a single line at maxLineChars characters.
+func truncateLine(line string) string {
+	if len(line) <= maxLineChars {
+		return line
+	}
+	return line[:maxLineChars] + fmt.Sprintf("... [truncated, %d chars total]", len(line))
 }
 
 func formatLines(lines []string, startNum int) string {
 	var b strings.Builder
 	width := len(fmt.Sprintf("%d", startNum+len(lines)-1))
 	for i, line := range lines {
-		fmt.Fprintf(&b, "%*d\t%s\n", width, startNum+i, line)
+		fmt.Fprintf(&b, "%*d\t%s\n", width, startNum+i, truncateLine(line))
 	}
 	return b.String()
 }
@@ -161,11 +264,10 @@ func walkDir(path string, prefix string, depth int, maxDepth int, b *strings.Bui
 		return err
 	}
 
-	// Filter hidden files and node_modules
+	// Filter only specifically excluded directories
 	var visible []os.DirEntry
 	for _, e := range entries {
-		name := e.Name()
-		if strings.HasPrefix(name, ".") || name == "node_modules" {
+		if excludedDirs[e.Name()] {
 			continue
 		}
 		visible = append(visible, e)
@@ -179,7 +281,12 @@ func walkDir(path string, prefix string, depth int, maxDepth int, b *strings.Bui
 		}
 
 		name := entry.Name()
-		if entry.IsDir() {
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(filepath.Join(path, name))
+			if err == nil {
+				name += " -> " + target
+			}
+		} else if entry.IsDir() {
 			name += "/"
 		}
 		fmt.Fprintf(b, "%s%s%s\n", prefix, connector, name)

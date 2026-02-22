@@ -37,7 +37,7 @@ func TestCreateFileNew(t *testing.T) {
 	}
 }
 
-func TestCreateFileRefuseOverwrite(t *testing.T) {
+func TestCreateFileOverwriteByDefault(t *testing.T) {
 	tmp := t.TempDir()
 	file := filepath.Join(tmp, "existing.txt")
 	os.WriteFile(file, []byte("original"), 0644)
@@ -46,40 +46,16 @@ func TestCreateFileRefuseOverwrite(t *testing.T) {
 	resolver, _ := pathscope.NewResolver(nil, nil)
 	handler := createFileHandler(sess, resolver, 10*1024*1024)
 
-	_, _, err := handler(context.Background(), nil, CreateFileArgs{
+	// Should overwrite without needing an explicit flag
+	result, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    file,
-		Content: "overwrite",
-	})
-	if err == nil {
-		t.Error("expected error when overwrite is false")
-	}
-	if !strings.Contains(err.Error(), "already exists") {
-		t.Errorf("expected 'already exists' error, got: %v", err)
-	}
-
-	// Original should be unchanged
-	data, _ := os.ReadFile(file)
-	if string(data) != "original" {
-		t.Error("file should not have been overwritten")
-	}
-}
-
-func TestCreateFileOverwriteAllowed(t *testing.T) {
-	tmp := t.TempDir()
-	file := filepath.Join(tmp, "existing.txt")
-	os.WriteFile(file, []byte("original"), 0644)
-
-	sess := session.New(tmp)
-	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := createFileHandler(sess, resolver, 10*1024*1024)
-
-	_, _, err := handler(context.Background(), nil, CreateFileArgs{
-		Path:      file,
-		Content:   "new content",
-		Overwrite: true,
+		Content: "new content",
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if isErrorResult(result) {
+		t.Errorf("overwrite should succeed by default, got error: %s", resultText(result))
 	}
 
 	data, _ := os.ReadFile(file)
@@ -140,15 +116,18 @@ func TestCreateFileMaxSize(t *testing.T) {
 	resolver, _ := pathscope.NewResolver(nil, nil)
 	handler := createFileHandler(sess, resolver, 100)
 
-	_, _, err := handler(context.Background(), nil, CreateFileArgs{
+	result, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    file,
 		Content: strings.Repeat("x", 200),
 	})
-	if err == nil {
-		t.Error("expected error for exceeding max file size")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "exceeds maximum") {
-		t.Errorf("expected size error, got: %v", err)
+	if !isErrorResult(result) {
+		t.Error("expected IsError for exceeding max file size")
+	}
+	if !strings.Contains(resultText(result), "exceeds maximum") {
+		t.Errorf("expected size error, got: %s", resultText(result))
 	}
 }
 
@@ -158,11 +137,14 @@ func TestCreateFilePathScoping(t *testing.T) {
 	resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
 	handler := createFileHandler(sess, resolver, 10*1024*1024)
 
-	_, _, err := handler(context.Background(), nil, CreateFileArgs{
+	result, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    "/etc/evil.txt",
 		Content: "hacked",
 	})
-	if err == nil {
-		t.Error("expected path scoping error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isErrorResult(result) {
+		t.Error("expected IsError for path scoping violation")
 	}
 }

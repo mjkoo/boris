@@ -52,16 +52,19 @@ func TestStrReplaceNotFound(t *testing.T) {
 	resolver, _ := pathscope.NewResolver(nil, nil)
 	handler := strReplaceHandler(sess, resolver)
 
-	_, _, err := handler(context.Background(), nil, StrReplaceArgs{
+	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   file,
 		OldStr: "nonexistent",
 		NewStr: "x",
 	})
-	if err == nil {
-		t.Error("expected error for string not found")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' error, got: %v", err)
+	if !isErrorResult(result) {
+		t.Error("expected IsError for string not found")
+	}
+	if !strings.Contains(resultText(result), "not found") {
+		t.Errorf("expected 'not found' error, got: %s", resultText(result))
 	}
 }
 
@@ -74,16 +77,19 @@ func TestStrReplaceMultipleOccurrences(t *testing.T) {
 	resolver, _ := pathscope.NewResolver(nil, nil)
 	handler := strReplaceHandler(sess, resolver)
 
-	_, _, err := handler(context.Background(), nil, StrReplaceArgs{
+	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   file,
 		OldStr: "aaa",
 		NewStr: "x",
 	})
-	if err == nil {
-		t.Error("expected error for multiple occurrences")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "2 occurrences") {
-		t.Errorf("expected occurrence count in error, got: %v", err)
+	if !isErrorResult(result) {
+		t.Error("expected IsError for multiple occurrences")
+	}
+	if !strings.Contains(resultText(result), "2 occurrences") {
+		t.Errorf("expected occurrence count in error, got: %s", resultText(result))
 	}
 }
 
@@ -108,6 +114,119 @@ func TestStrReplaceDeletion(t *testing.T) {
 	if string(data) != "keep keep\n" {
 		t.Errorf("expected 'keep keep\\n', got %q", data)
 	}
+}
+
+func TestStrReplaceAll(t *testing.T) {
+	tmp := t.TempDir()
+	file := filepath.Join(tmp, "test.txt")
+	os.WriteFile(file, []byte("aaa bbb aaa ccc aaa\n"), 0644)
+
+	sess := session.New(tmp)
+	resolver, _ := pathscope.NewResolver(nil, nil)
+	handler := strReplaceHandler(sess, resolver)
+
+	t.Run("multiple replacements with count", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:       file,
+			OldStr:     "aaa",
+			NewStr:     "XXX",
+			ReplaceAll: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		if !strings.Contains(text, "3 occurrences") {
+			t.Errorf("expected '3 occurrences', got: %s", text)
+		}
+		data, _ := os.ReadFile(file)
+		if strings.Contains(string(data), "aaa") {
+			t.Error("file should not contain 'aaa' after replace_all")
+		}
+		if strings.Count(string(data), "XXX") != 3 {
+			t.Errorf("expected 3 XXX replacements, got: %s", data)
+		}
+	})
+
+	t.Run("no match error", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:       file,
+			OldStr:     "nonexistent",
+			NewStr:     "y",
+			ReplaceAll: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected IsError for no matches even with replace_all")
+		}
+	})
+
+	t.Run("replace_all false preserves uniqueness check", func(t *testing.T) {
+		// Write file with duplicates
+		os.WriteFile(file, []byte("aaa bbb aaa\n"), 0644)
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:       file,
+			OldStr:     "aaa",
+			NewStr:     "x",
+			ReplaceAll: false,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected IsError for multiple occurrences without replace_all")
+		}
+	})
+}
+
+func TestStrReplaceEmptyOldStr(t *testing.T) {
+	tmp := t.TempDir()
+	file := filepath.Join(tmp, "test.txt")
+	original := "hello world\n"
+	os.WriteFile(file, []byte(original), 0644)
+
+	sess := session.New(tmp)
+	resolver, _ := pathscope.NewResolver(nil, nil)
+	handler := strReplaceHandler(sess, resolver)
+
+	t.Run("replace_all true", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:       file,
+			OldStr:     "",
+			NewStr:     "inserted",
+			ReplaceAll: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected IsError for empty old_str")
+		}
+		data, _ := os.ReadFile(file)
+		if string(data) != original {
+			t.Errorf("file should be unchanged, got %q", data)
+		}
+	})
+
+	t.Run("replace_all false", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:   file,
+			OldStr: "",
+			NewStr: "inserted",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected IsError for empty old_str")
+		}
+		data, _ := os.ReadFile(file)
+		if string(data) != original {
+			t.Errorf("file should be unchanged, got %q", data)
+		}
+	})
 }
 
 func TestStrReplacePreservesPermissions(t *testing.T) {
@@ -140,13 +259,16 @@ func TestStrReplacePathScoping(t *testing.T) {
 	resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
 	handler := strReplaceHandler(sess, resolver)
 
-	_, _, err := handler(context.Background(), nil, StrReplaceArgs{
+	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   "/etc/hostname",
 		OldStr: "x",
 		NewStr: "y",
 	})
-	if err == nil {
-		t.Error("expected path scoping error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isErrorResult(result) {
+		t.Error("expected IsError for path scoping violation")
 	}
 }
 
@@ -156,12 +278,15 @@ func TestStrReplaceFileNotFound(t *testing.T) {
 	resolver, _ := pathscope.NewResolver(nil, nil)
 	handler := strReplaceHandler(sess, resolver)
 
-	_, _, err := handler(context.Background(), nil, StrReplaceArgs{
+	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   filepath.Join(tmp, "nonexistent"),
 		OldStr: "x",
 		NewStr: "y",
 	})
-	if err == nil {
-		t.Error("expected error for nonexistent file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isErrorResult(result) {
+		t.Error("expected IsError for nonexistent file")
 	}
 }

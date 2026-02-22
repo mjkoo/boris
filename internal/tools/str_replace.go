@@ -13,56 +13,77 @@ import (
 
 // StrReplaceArgs is the input schema for the str_replace tool.
 type StrReplaceArgs struct {
-	Path   string `json:"path" jsonschema:"file path"`
-	OldStr string `json:"old_str" jsonschema:"the string to find (must be unique in the file)"`
-	NewStr string `json:"new_str,omitempty" jsonschema:"replacement string (empty to delete)"`
+	Path       string `json:"path" jsonschema:"file path"`
+	OldStr     string `json:"old_str" jsonschema:"the string to find (must be unique unless replace_all is true)"`
+	NewStr     string `json:"new_str,omitempty" jsonschema:"replacement string (empty or omitted to delete)"`
+	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"replace all occurrences instead of requiring a unique match"`
 }
 
 func strReplaceHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[StrReplaceArgs, any] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, args StrReplaceArgs) (*mcp.CallToolResult, any, error) {
-		resolved, err := resolver.Resolve(sess.Cwd(), args.Path)
-		if err != nil {
-			return nil, nil, err
-		}
+		return doStrReplace(sess, resolver, args.Path, args.OldStr, args.NewStr, args.ReplaceAll)
+	}
+}
 
-		info, err := os.Stat(resolved)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, nil, fmt.Errorf("file not found: %s", resolved)
-			}
-			return nil, nil, err
-		}
+func doStrReplace(sess *session.Session, resolver *pathscope.Resolver, path, oldStr, newStr string, replaceAll bool) (*mcp.CallToolResult, any, error) {
+	if oldStr == "" {
+		return toolErr("old_str must not be empty")
+	}
 
-		data, err := os.ReadFile(resolved)
-		if err != nil {
-			return nil, nil, err
-		}
-		content := string(data)
+	resolved, err := resolver.Resolve(sess.Cwd(), path)
+	if err != nil {
+		return toolErr("%v", err)
+	}
 
-		count := strings.Count(content, args.OldStr)
-		if count == 0 {
-			return nil, nil, fmt.Errorf("string not found in %s", resolved)
+	info, err := os.Stat(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return toolErr("file not found: %s", resolved)
 		}
-		if count > 1 {
-			return nil, nil, fmt.Errorf("found %d occurrences of the string in %s; match must be unique", count, resolved)
-		}
+		return toolErr("%v", err)
+	}
 
-		offset := strings.Index(content, args.OldStr)
-		newContent := strings.Replace(content, args.OldStr, args.NewStr, 1)
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return toolErr("%v", err)
+	}
+	content := string(data)
 
-		// Preserve file permissions
+	count := strings.Count(content, oldStr)
+	if count == 0 {
+		return toolErr("string not found in %s", resolved)
+	}
+
+	if replaceAll {
+		newContent := strings.ReplaceAll(content, oldStr, newStr)
 		if err := os.WriteFile(resolved, []byte(newContent), info.Mode().Perm()); err != nil {
-			return nil, nil, fmt.Errorf("failed to write file: %w", err)
+			return toolErr("failed to write file: %v", err)
 		}
-
-		// Build context snippet around the replacement
-		snippet := contextSnippet(newContent, offset)
-
-		text := fmt.Sprintf("Replaced in %s\n\n%s", resolved, snippet)
+		text := fmt.Sprintf("Replaced %d occurrences in %s", count, resolved)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		}, nil, nil
 	}
+
+	if count > 1 {
+		return toolErr("found %d occurrences of the string in %s; match must be unique (use replace_all to replace all)", count, resolved)
+	}
+
+	offset := strings.Index(content, oldStr)
+	newContent := strings.Replace(content, oldStr, newStr, 1)
+
+	// Preserve file permissions
+	if err := os.WriteFile(resolved, []byte(newContent), info.Mode().Perm()); err != nil {
+		return toolErr("failed to write file: %v", err)
+	}
+
+	// Build context snippet around the replacement
+	snippet := contextSnippet(newContent, offset)
+
+	text := fmt.Sprintf("Replaced in %s\n\n%s", resolved, snippet)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+	}, nil, nil
 }
 
 const snippetContext = 4

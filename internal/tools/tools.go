@@ -1,16 +1,44 @@
 package tools
 
 import (
+	"context"
+	"fmt"
+	"reflect"
+
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/mjkoo/boris/internal/pathscope"
 	"github.com/mjkoo/boris/internal/session"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// typeSchemas provides custom JSON schema mappings for named types.
+var typeSchemas = map[reflect.Type]*jsonschema.Schema{
+	reflect.TypeFor[EditorCommand](): {
+		Type: "string",
+		Enum: []any{EditorCommandView, EditorCommandStrReplace, EditorCommandCreate},
+	},
+	reflect.TypeFor[ViewRange](): {
+		Type:  "array",
+		Items: &jsonschema.Schema{Type: "integer"},
+	},
+}
+
+// toolErr returns a CallToolResult with IsError set to true.
+// Use this for operational errors (file not found, invalid input, etc.)
+// instead of returning Go errors, which are reserved for infrastructure failures.
+func toolErr(msg string, args ...any) (*mcp.CallToolResult, any, error) {
+	r := &mcp.CallToolResult{}
+	r.SetError(fmt.Errorf(msg, args...))
+	return r, nil, nil
+}
+
 // Config holds configuration for tool registration.
 type Config struct {
-	NoBash         bool
-	MaxFileSize    int64
-	DefaultTimeout int
+	NoBash          bool
+	MaxFileSize     int64
+	DefaultTimeout  int
+	Shell           string
+	AnthropicCompat bool
 }
 
 // RegisterAll registers all tools with the MCP server.
@@ -18,22 +46,83 @@ func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session
 	if !cfg.NoBash {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "bash",
-			Description: "Execute a shell command. Commands run in a persistent session that tracks the working directory across calls.",
-		}, bashHandler(sess, cfg.DefaultTimeout))
+			Description: "Executes a bash command with optional timeout. The working directory persists between calls. When run_in_background is true, the command runs asynchronously and returns a task_id for later retrieval via task_output.",
+		}, bashHandler(sess, cfg))
+
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "task_output",
+			Description: "Retrieve output from a running or completed background bash command by task_id. Running tasks return current output with status: running. Completed tasks return final output, exit code, and are cleaned up after retrieval.",
+		}, taskOutputHandler(sess))
 	}
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "view",
-		Description: "Read a file with line numbers, or list a directory (2 levels deep). Supports line ranges for large files.",
-	}, viewHandler(sess, resolver, cfg.MaxFileSize))
+	if cfg.AnthropicCompat {
+		editorSchema, err := jsonschema.For[StrReplaceEditorArgs](&jsonschema.ForOptions{
+			TypeSchemas: typeSchemas,
+		})
+		if err != nil {
+			panic(fmt.Sprintf("failed to build str_replace_editor schema: %v", err))
+		}
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "str_replace_editor",
+			Description: "View, create, and edit files. Use the 'command' parameter to select the operation: 'view' to read files/directories, 'str_replace' to replace text, 'create' to create or overwrite files.",
+			InputSchema: editorSchema,
+		}, strReplaceEditorHandler(sess, resolver, cfg.MaxFileSize))
+	} else {
+		viewSchema, err := jsonschema.For[ViewArgs](&jsonschema.ForOptions{
+			TypeSchemas: typeSchemas,
+		})
+		if err != nil {
+			panic(fmt.Sprintf("failed to build view schema: %v", err))
+		}
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "view",
+			Description: "Read a file from the filesystem with line numbers, or list a directory (2 levels deep). Supports line ranges for large files. Returns images as inline content. Lines longer than 2000 characters are truncated.",
+			InputSchema: viewSchema,
+		}, viewHandler(sess, resolver, cfg.MaxFileSize))
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "str_replace",
-		Description: "Replace a unique string in a file. The old_str must appear exactly once.",
-	}, strReplaceHandler(sess, resolver))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "str_replace",
+			Description: "Replace a unique string in a file. The old_str must appear exactly once unless replace_all is true. Omit new_str or set it to empty string to delete the matched text.",
+		}, strReplaceHandler(sess, resolver))
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "create_file",
-		Description: "Create a new file or overwrite an existing one. Creates parent directories as needed.",
-	}, createFileHandler(sess, resolver, cfg.MaxFileSize))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "create_file",
+			Description: "Create a new file or overwrite an existing one. Creates parent directories as needed.",
+		}, createFileHandler(sess, resolver, cfg.MaxFileSize))
+	}
+}
+
+// EditorCommand is the command type for the combined str_replace_editor tool.
+type EditorCommand string
+
+const (
+	EditorCommandView       EditorCommand = "view"
+	EditorCommandStrReplace EditorCommand = "str_replace"
+	EditorCommandCreate     EditorCommand = "create"
+)
+
+// StrReplaceEditorArgs is the input schema for the combined str_replace_editor tool.
+type StrReplaceEditorArgs struct {
+	Command    EditorCommand `json:"command" jsonschema:"the operation to perform: view, str_replace, or create"`
+	Path       string        `json:"path" jsonschema:"file path"`
+	ViewRange  ViewRange     `json:"view_range,omitempty" jsonschema:"optional line range [start end] (1-indexed, for view command)"`
+	OldStr     string        `json:"old_str,omitempty" jsonschema:"the string to find (for str_replace command)"`
+	NewStr     string        `json:"new_str,omitempty" jsonschema:"replacement string (for str_replace command)"`
+	ReplaceAll bool          `json:"replace_all,omitempty" jsonschema:"replace all occurrences (for str_replace command)"`
+	FileText   string        `json:"file_text,omitempty" jsonschema:"file content (for create command)"`
+}
+
+func strReplaceEditorHandler(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64) mcp.ToolHandlerFor[StrReplaceEditorArgs, any] {
+	return func(_ context.Context, _ *mcp.CallToolRequest, args StrReplaceEditorArgs) (*mcp.CallToolResult, any, error) {
+		switch args.Command {
+		case EditorCommandView:
+			return doView(sess, resolver, maxFileSize, args.Path, args.ViewRange)
+		case EditorCommandStrReplace:
+			return doStrReplace(sess, resolver, args.Path, args.OldStr, args.NewStr, args.ReplaceAll)
+		case EditorCommandCreate:
+			return doCreateFile(sess, resolver, maxFileSize, args.Path, args.FileText)
+		default:
+			return toolErr("unknown command: %s (valid commands: view, str_replace, create)", args.Command)
+		}
+	}
 }

@@ -61,22 +61,23 @@ func (v VersionFlag) BeforeApply(app *kong.Kong, vars kong.Vars) error {
 
 // CLI defines the command-line interface via kong struct tags.
 type CLI struct {
-	Version VersionFlag `help:"Print version and exit." short:"v"`
-	Port        int      `help:"Listen port (HTTP mode)." default:"8080" env:"BORIS_PORT"`
-	Transport   string   `help:"Transport: http or stdio." default:"http" enum:"http,stdio" env:"BORIS_TRANSPORT"`
-	Workdir     string   `help:"Initial working directory." default:"." env:"BORIS_WORKDIR"`
-	Timeout     int      `help:"Default bash timeout in seconds." default:"120" env:"BORIS_TIMEOUT"`
-	AllowDir    []string `help:"Allowed directories (repeatable)." env:"BORIS_ALLOW_DIRS"`
-	DenyDir     []string `help:"Denied directories/patterns (repeatable)." env:"BORIS_DENY_DIRS"`
-	NoBash      bool     `help:"Disable bash tool." env:"BORIS_NO_BASH"`
-	MaxFileSize string   `help:"Max file size for view/create." default:"10MB" env:"BORIS_MAX_FILE_SIZE"`
+	Version     VersionFlag `help:"Print version and exit." short:"v"`
+	Port        int         `help:"Listen port (HTTP mode)." default:"8080" env:"BORIS_PORT"`
+	Transport   string      `help:"Transport: http or stdio." default:"http" enum:"http,stdio" env:"BORIS_TRANSPORT"`
+	Workdir     string      `help:"Initial working directory." default:"." env:"BORIS_WORKDIR"`
+	Timeout     int         `help:"Default bash timeout in seconds." default:"120" env:"BORIS_TIMEOUT"`
+	AllowDir    []string    `help:"Allowed directories (repeatable)." env:"BORIS_ALLOW_DIRS"`
+	DenyDir     []string    `help:"Denied directories/patterns (repeatable)." env:"BORIS_DENY_DIRS"`
+	NoBash          bool        `help:"Disable bash tool." env:"BORIS_NO_BASH"`
+	MaxFileSize     string      `help:"Max file size for view/create." default:"10MB" env:"BORIS_MAX_FILE_SIZE"`
+	AnthropicCompat bool        `help:"Expose combined str_replace_editor tool schema." env:"BORIS_ANTHROPIC_COMPAT"`
 }
 
 func main() {
 	var cli CLI
 	kong.Parse(&cli,
 		kong.Name("boris"),
-		kong.Description("MCP coding sandbox server"),
+		kong.Description("Coding agent tools as a MCP server."),
 		kong.Vars{"version": versionInfo()},
 	)
 
@@ -95,6 +96,13 @@ func main() {
 		log.Fatalf("invalid --workdir: %v", err)
 	}
 
+	// Detect shell
+	shell := "/bin/sh"
+	if _, err := os.Stat("/bin/bash"); err == nil {
+		shell = "/bin/bash"
+	}
+	log.Printf("using shell: %s", shell)
+
 	// Create session
 	sess := session.New(workdir)
 
@@ -112,9 +120,11 @@ func main() {
 
 	// Register tools
 	tools.RegisterAll(server, resolver, sess, tools.Config{
-		NoBash:         cli.NoBash,
-		MaxFileSize:    maxFileSize,
-		DefaultTimeout: cli.Timeout,
+		NoBash:          cli.NoBash,
+		MaxFileSize:     maxFileSize,
+		DefaultTimeout:  cli.Timeout,
+		Shell:           shell,
+		AnthropicCompat: cli.AnthropicCompat,
 	})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

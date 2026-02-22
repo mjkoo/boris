@@ -4,13 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mjkoo/boris/internal/session"
 )
 
 func TestBashSimpleCommand(t *testing.T) {
 	sess := session.New(t.TempDir())
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	result, _, err := handler(context.Background(), nil, BashArgs{Command: "echo hello"})
 	if err != nil {
@@ -27,7 +28,7 @@ func TestBashSimpleCommand(t *testing.T) {
 
 func TestBashNonZeroExit(t *testing.T) {
 	sess := session.New(t.TempDir())
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	result, _, err := handler(context.Background(), nil, BashArgs{Command: "exit 42"})
 	if err != nil {
@@ -37,11 +38,15 @@ func TestBashNonZeroExit(t *testing.T) {
 	if !strings.Contains(text, "exit_code: 42") {
 		t.Errorf("expected exit_code: 42, got: %s", text)
 	}
+	// Non-zero exit code is data, not an error
+	if isErrorResult(result) {
+		t.Error("non-zero exit code should not set IsError")
+	}
 }
 
 func TestBashStderrCapture(t *testing.T) {
 	sess := session.New(t.TempDir())
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	result, _, err := handler(context.Background(), nil, BashArgs{Command: "echo err >&2"})
 	if err != nil {
@@ -56,7 +61,7 @@ func TestBashStderrCapture(t *testing.T) {
 func TestBashCwdTracking(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	// cd to /tmp
 	_, _, err := handler(context.Background(), nil, BashArgs{Command: "cd /tmp"})
@@ -80,23 +85,43 @@ func TestBashCwdTracking(t *testing.T) {
 
 func TestBashSentinelStripping(t *testing.T) {
 	sess := session.New(t.TempDir())
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	result, _, err := handler(context.Background(), nil, BashArgs{Command: "echo hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := resultText(result)
-	if strings.Contains(text, cwdSentinel) {
+	if strings.Contains(text, sess.Sentinel()) {
 		t.Errorf("sentinel should be stripped from output: %s", text)
 	}
 }
 
-func TestBashTimeout(t *testing.T) {
+func TestBashSentinelNonce(t *testing.T) {
 	sess := session.New(t.TempDir())
-	handler := bashHandler(sess, 120)
 
-	result, _, err := handler(context.Background(), nil, BashArgs{Command: "sleep 300", Timeout: 1})
+	// Sentinel should contain the nonce
+	sentinel := sess.Sentinel()
+	if !strings.Contains(sentinel, sess.Nonce()) {
+		t.Errorf("sentinel %q should contain nonce %q", sentinel, sess.Nonce())
+	}
+
+	// Old sentinel format should not trigger parser
+	oldSentinel := "__BORIS_CWD__"
+	stdout := "output\n" + oldSentinel + "\n/fake/path\n"
+	parsed := parseSentinel(stdout, sentinel, sess)
+	// Old sentinel should NOT be parsed — should remain in output
+	if !strings.Contains(parsed, oldSentinel) {
+		t.Errorf("old sentinel format should not be parsed, got: %s", parsed)
+	}
+}
+
+func TestBashTimeoutMilliseconds(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	// Timeout of 1000ms (1 second) should be enough to kill sleep 300
+	result, _, err := handler(context.Background(), nil, BashArgs{Command: "sleep 300", Timeout: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,15 +129,35 @@ func TestBashTimeout(t *testing.T) {
 	if !strings.Contains(text, "timed out") {
 		t.Errorf("expected timeout message, got: %s", text)
 	}
+	if !strings.Contains(text, "1000ms") {
+		t.Errorf("expected timeout in milliseconds, got: %s", text)
+	}
+}
+
+func TestBashTimeoutMaxCap(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	// Request 900000ms (15 min), should be clamped to 600000ms (10 min)
+	// We can't actually wait that long, so just verify the command starts.
+	// Instead, use a short command with an absurd timeout to verify it doesn't error.
+	result, _, err := handler(context.Background(), nil, BashArgs{Command: "echo ok", Timeout: 900000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(result)
+	if !strings.Contains(text, "ok") {
+		t.Errorf("expected 'ok' in output, got: %s", text)
+	}
 }
 
 func TestBashMissingSentinelPreservesCwd(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	// Timeout before sentinel is printed — cwd should be preserved
-	_, _, _ = handler(context.Background(), nil, BashArgs{Command: "sleep 300", Timeout: 1})
+	_, _, _ = handler(context.Background(), nil, BashArgs{Command: "sleep 300", Timeout: 1000})
 
 	if sess.Cwd() != tmp {
 		t.Errorf("cwd should be preserved after timeout, got %q, want %q", sess.Cwd(), tmp)
@@ -122,7 +167,7 @@ func TestBashMissingSentinelPreservesCwd(t *testing.T) {
 func TestBashInitialWorkdir(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	result, _, err := handler(context.Background(), nil, BashArgs{Command: "pwd"})
 	if err != nil {
@@ -136,12 +181,338 @@ func TestBashInitialWorkdir(t *testing.T) {
 
 func TestBashEmptyCommand(t *testing.T) {
 	sess := session.New(t.TempDir())
-	handler := bashHandler(sess, 120)
+	handler := bashHandler(sess, testConfig())
 
 	for _, cmd := range []string{"", "  ", "\t\n"} {
-		_, _, err := handler(context.Background(), nil, BashArgs{Command: cmd})
-		if err == nil {
-			t.Errorf("expected error for empty command %q", cmd)
+		result, _, err := handler(context.Background(), nil, BashArgs{Command: cmd})
+		if err != nil {
+			t.Errorf("expected toolErr (not Go error) for empty command %q", cmd)
+			continue
 		}
+		if !isErrorResult(result) {
+			t.Errorf("expected IsError for empty command %q", cmd)
+		}
+	}
+}
+
+func TestBashSIGTERM(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	// Use a trap to verify SIGTERM is received and process exits gracefully
+	cmd := `trap 'echo got_sigterm; exit 0' TERM; sleep 300`
+	start := time.Now()
+	result, _, err := handler(context.Background(), nil, BashArgs{Command: cmd, Timeout: 1000})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(result)
+	if !strings.Contains(text, "timed out") {
+		t.Errorf("expected timeout message, got: %s", text)
+	}
+	// Should have been killed within ~2 seconds (1s timeout + trap handling),
+	// not after the 5s SIGKILL grace period
+	if elapsed > 4*time.Second {
+		t.Errorf("expected graceful SIGTERM exit, took %v", elapsed)
+	}
+}
+
+func TestBashOutputTruncation(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	t.Run("within limit", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, BashArgs{Command: "echo hello"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		if strings.Contains(text, "Truncated") {
+			t.Error("short output should not be truncated")
+		}
+	})
+
+	t.Run("exceeds limit", func(t *testing.T) {
+		// Generate >30000 chars of output
+		result, _, err := handler(context.Background(), nil, BashArgs{
+			Command: "python3 -c \"print('x' * 50000)\"",
+			Timeout: 10000,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		if !strings.Contains(text, "Truncated") {
+			t.Error("large output should be truncated")
+		}
+	})
+
+	t.Run("stderr independent truncation", func(t *testing.T) {
+		// Short stdout, large stderr
+		result, _, err := handler(context.Background(), nil, BashArgs{
+			Command: "echo short; python3 -c \"import sys; sys.stderr.write('y' * 50000)\"",
+			Timeout: 10000,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		if !strings.Contains(text, "short") {
+			t.Error("stdout should be present")
+		}
+		if !strings.Contains(text, "Truncated") {
+			t.Error("stderr should be truncated")
+		}
+	})
+}
+
+func TestBashBackgroundCommand(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	t.Run("immediate return with task_id", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, BashArgs{
+			Command:         "sleep 60",
+			RunInBackground: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		if !strings.Contains(text, "task_id:") {
+			t.Errorf("expected task_id in response, got: %s", text)
+		}
+		if !strings.Contains(text, "background") {
+			t.Errorf("expected background confirmation, got: %s", text)
+		}
+	})
+
+	t.Run("cwd not updated", func(t *testing.T) {
+		tmp := t.TempDir()
+		bgSess := session.New(tmp)
+		bgHandler := bashHandler(bgSess, testConfig())
+
+		_, _, err := bgHandler(context.Background(), nil, BashArgs{
+			Command:         "cd /tmp",
+			RunInBackground: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Wait a bit for the background command to complete
+		time.Sleep(500 * time.Millisecond)
+		if bgSess.Cwd() != tmp {
+			t.Errorf("background command should not update cwd, got %q, want %q", bgSess.Cwd(), tmp)
+		}
+	})
+
+	t.Run("task limit enforcement", func(t *testing.T) {
+		limitSess := session.New(t.TempDir())
+		limitHandler := bashHandler(limitSess, testConfig())
+
+		// Fill up 10 tasks
+		for i := 0; i < 10; i++ {
+			result, _, err := limitHandler(context.Background(), nil, BashArgs{
+				Command:         "sleep 300",
+				RunInBackground: true,
+			})
+			if err != nil {
+				t.Fatalf("task %d: %v", i, err)
+			}
+			if isErrorResult(result) {
+				t.Fatalf("task %d should succeed: %s", i, resultText(result))
+			}
+		}
+
+		// 11th should fail
+		result, _, err := limitHandler(context.Background(), nil, BashArgs{
+			Command:         "sleep 300",
+			RunInBackground: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected IsError when exceeding task limit")
+		}
+		if !strings.Contains(resultText(result), "limit") {
+			t.Errorf("expected limit error message, got: %s", resultText(result))
+		}
+	})
+}
+
+func TestTaskOutput(t *testing.T) {
+	sess := session.New(t.TempDir())
+	bashH := bashHandler(sess, testConfig())
+	taskH := taskOutputHandler(sess)
+
+	t.Run("running status", func(t *testing.T) {
+		result, _, _ := bashH(context.Background(), nil, BashArgs{
+			Command:         "sleep 60",
+			RunInBackground: true,
+		})
+		text := resultText(result)
+		// Extract task_id
+		taskID := ""
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, "task_id: ") {
+				taskID = strings.TrimPrefix(line, "task_id: ")
+				break
+			}
+		}
+		if taskID == "" {
+			t.Fatal("no task_id in response")
+		}
+
+		result, _, err := taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = resultText(result)
+		if !strings.Contains(text, "status: running") {
+			t.Errorf("expected running status, got: %s", text)
+		}
+	})
+
+	t.Run("completed status with cleanup", func(t *testing.T) {
+		result, _, _ := bashH(context.Background(), nil, BashArgs{
+			Command:         "echo done",
+			RunInBackground: true,
+		})
+		text := resultText(result)
+		taskID := ""
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, "task_id: ") {
+				taskID = strings.TrimPrefix(line, "task_id: ")
+				break
+			}
+		}
+		if taskID == "" {
+			t.Fatal("no task_id in response")
+		}
+
+		// Wait for completion
+		time.Sleep(1 * time.Second)
+
+		result, _, err := taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = resultText(result)
+		if !strings.Contains(text, "status: completed") {
+			t.Errorf("expected completed status, got: %s", text)
+		}
+		if !strings.Contains(text, "done") {
+			t.Errorf("expected 'done' in output, got: %s", text)
+		}
+
+		// Second retrieval should fail (single-read cleanup)
+		result, _, err = taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected IsError after task cleanup")
+		}
+	})
+
+	t.Run("unknown task_id", func(t *testing.T) {
+		result, _, err := taskH(context.Background(), nil, TaskOutputArgs{TaskID: "nonexistent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected IsError for unknown task_id")
+		}
+		if !strings.Contains(resultText(result), "not found") {
+			t.Errorf("expected 'not found' error, got: %s", resultText(result))
+		}
+	})
+}
+
+func TestBashDescriptionParameter(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	result, _, err := handler(context.Background(), nil, BashArgs{
+		Command:     "echo hello",
+		Description: "Print a greeting",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(result)
+	if !strings.Contains(text, "hello") {
+		t.Errorf("expected 'hello' in output, got: %s", text)
+	}
+	if !strings.Contains(text, "exit_code: 0") {
+		t.Errorf("expected exit_code: 0, got: %s", text)
+	}
+}
+
+func TestBackgroundTaskOutputRace(t *testing.T) {
+	sess := session.New(t.TempDir())
+	bashH := bashHandler(sess, testConfig())
+	taskH := taskOutputHandler(sess)
+
+	// Start a background command that produces continuous output
+	result, _, err := bashH(context.Background(), nil, BashArgs{
+		Command:         "for i in $(seq 1 50); do echo line$i; sleep 0.01; done",
+		RunInBackground: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(result)
+	taskID := ""
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "task_id: ") {
+			taskID = strings.TrimPrefix(line, "task_id: ")
+			break
+		}
+	}
+	if taskID == "" {
+		t.Fatal("no task_id in response")
+	}
+
+	// Read output concurrently while the command is still running.
+	// With -race, this exposes any concurrent read/write on the buffer.
+	for i := 0; i < 10; i++ {
+		result, _, err = taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = resultText(result)
+		if strings.Contains(text, "status: completed") {
+			break // task finished; RemoveTask was called, further reads would 404
+		}
+		if isErrorResult(result) {
+			t.Fatalf("unexpected error on iteration %d: %s", i, text)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestBashIsErrorForOperationalErrors(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	// Empty command should be IsError, not Go error
+	result, _, err := handler(context.Background(), nil, BashArgs{Command: ""})
+	if err != nil {
+		t.Error("operational errors should not return Go errors")
+	}
+	if !isErrorResult(result) {
+		t.Error("empty command should set IsError")
+	}
+
+	// Non-zero exit code should NOT be IsError
+	result, _, err = handler(context.Background(), nil, BashArgs{Command: "exit 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isErrorResult(result) {
+		t.Error("non-zero exit code should not set IsError")
 	}
 }

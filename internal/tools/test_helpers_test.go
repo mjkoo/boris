@@ -15,3 +15,17 @@ func resultText(r *mcp.CallToolResult) string {
 	}
 	return tc.Text
 }
+
+// isErrorResult returns true if the CallToolResult has IsError set.
+func isErrorResult(r *mcp.CallToolResult) bool {
+	return r != nil && r.IsError
+}
+
+// testConfig returns a Config suitable for testing.
+func testConfig() Config {
+	return Config{
+		Shell:          "/bin/sh",
+		DefaultTimeout: 120,
+		MaxFileSize:    10 * 1024 * 1024,
+	}
+}

@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Execute shell commands
 The `bash` tool SHALL accept a `command` string parameter (required), a `timeout` integer parameter (optional, in milliseconds, default 120000, max 600000), and a `run_in_background` boolean parameter (optional, default false). It SHALL execute the command via the detected shell (`/bin/bash` if available, otherwise `/bin/sh`) and return `stdout`, `stderr`, and `exit_code` in the result.
@@ -54,17 +54,6 @@ The bash tool SHALL track the working directory across calls within a session. E
 - **WHEN** a command outputs text containing `__BORIS_CWD__` (the old sentinel format without nonce)
 - **THEN** the parser does not misinterpret it as the sentinel because the actual sentinel includes a session-specific nonce
 
-### Requirement: Initial working directory
-The bash tool SHALL use the `--workdir` flag value (default: current directory at startup) as the initial working directory for the session.
-
-#### Scenario: Default working directory
-- **WHEN** boris is started without `--workdir` and the first bash command is `pwd`
-- **THEN** the result contains the directory boris was launched from
-
-#### Scenario: Custom working directory
-- **WHEN** boris is started with `--workdir=/tmp` and the first bash command is `pwd`
-- **THEN** the result contains `/tmp`
-
 ### Requirement: Timeout with process tree cleanup
 The bash tool SHALL terminate the entire process group (not just the parent process) when a command exceeds the timeout. On timeout, the tool SHALL first send SIGTERM to the process group, wait up to 5 seconds for graceful shutdown, then send SIGKILL if the process has not exited. The tool SHALL use the process group ID (PGID) for signal delivery. Any stdout/stderr captured before the timeout SHALL be included in the response. The response SHALL indicate that the command was killed due to timeout.
 
@@ -84,26 +73,7 @@ The bash tool SHALL terminate the entire process group (not just the parent proc
 - **WHEN** a command ignores SIGTERM and does not exit within 5 seconds of the timeout
 - **THEN** the tool sends SIGKILL to the process group to force termination
 
-### Requirement: Process group isolation
-Each bash command SHALL run in its own process group (`Setpgid: true`). This ensures timeout cleanup kills the entire process tree spawned by the command, not just the shell.
-
-#### Scenario: Child processes cleaned up on timeout
-- **WHEN** a command spawns background child processes and the command times out
-- **THEN** all child processes in the process group are killed
-
-### Requirement: Non-interactive execution
-The bash tool SHALL NOT allocate a TTY or support interactive commands. Commands MUST be non-interactive.
-
-#### Scenario: Interactive command fails gracefully
-- **WHEN** a command that requires TTY input is executed (e.g., a program waiting on stdin)
-- **THEN** the command either times out or exits without hanging the server
-
-### Requirement: Disable bash tool via --no-bash
-When boris is started with `--no-bash`, the bash tool SHALL NOT be registered with the MCP server. The tool SHALL not appear in the tool listing.
-
-#### Scenario: Bash tool hidden when disabled
-- **WHEN** boris is started with `--no-bash` and a client requests the tool list
-- **THEN** the `bash` tool does not appear in the response
+## ADDED Requirements
 
 ### Requirement: Output truncation
 The bash tool SHALL truncate stdout and stderr independently at 30,000 characters. When output is truncated, the tool SHALL append a message indicating the total character count and that output was truncated.
