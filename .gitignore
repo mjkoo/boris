@@ -1,5 +1,5 @@
 # Binary
-boris
+/boris
 
 # Test binary, built with `go test -c`
 *.test

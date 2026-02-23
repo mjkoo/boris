@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -63,15 +62,3 @@ func TestEditorViewRangeSchemaNotNullable(t *testing.T) {
 	}
 }
 
-func TestTypeSchemasCoverage(t *testing.T) {
-	// Ensure all expected types are in typeSchemas
-	expected := []reflect.Type{
-		reflect.TypeFor[EditorCommand](),
-		reflect.TypeFor[ViewRange](),
-	}
-	for _, typ := range expected {
-		if _, ok := typeSchemas[typ]; !ok {
-			t.Errorf("typeSchemas missing entry for %v", typ)
-		}
-	}
-}

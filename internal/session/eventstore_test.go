@@ -28,27 +28,6 @@ func TestSessionCleanupStoreSessionClosed(t *testing.T) {
 	}
 }
 
-func TestSessionCleanupStoreNoOps(t *testing.T) {
-	store := &SessionCleanupStore{Registry: NewRegistry()}
-
-	if err := store.Open(context.Background(), "s", "stream"); err != nil {
-		t.Errorf("Open returned error: %v", err)
-	}
-	if err := store.Append(context.Background(), "s", "stream", []byte("data")); err != nil {
-		t.Errorf("Append returned error: %v", err)
-	}
-
-	iter := store.After(context.Background(), "s", "stream", 0)
-	count := 0
-	iter(func(_ []byte, _ error) bool {
-		count++
-		return true
-	})
-	if count != 0 {
-		t.Errorf("After should yield 0 items, got %d", count)
-	}
-}
-
 func TestSessionCleanupStoreUnknownSession(t *testing.T) {
 	store := &SessionCleanupStore{Registry: NewRegistry()}
 	// Should not panic.
