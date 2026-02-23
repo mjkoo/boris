@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mjkoo/boris/internal/pathscope"
 	"github.com/mjkoo/boris/internal/session"
@@ -204,6 +205,47 @@ func TestViewLineTruncation(t *testing.T) {
 		}
 		if !strings.Contains(text, "5000 chars total") {
 			t.Errorf("should show total char count, got: %s", text)
+		}
+	})
+}
+
+func TestViewUnicodeTruncation(t *testing.T) {
+	tmp := t.TempDir()
+	sess := session.New(tmp)
+	resolver, _ := pathscope.NewResolver(nil, nil)
+	handler := viewHandler(sess, resolver, 100*1024*1024)
+
+	t.Run("multibyte within rune limit not truncated", func(t *testing.T) {
+		// 1000 3-byte runes = 3000 bytes but only 1000 runes — under 2000 limit
+		file := filepath.Join(tmp, "unicode_short.txt")
+		line := strings.Repeat("\u4e16", 1000) // 世 = 3-byte rune
+		os.WriteFile(file, []byte(line+"\n"), 0644)
+
+		result, _, _ := handler(context.Background(), nil, ViewArgs{Path: file})
+		text := resultText(result)
+		if strings.Contains(text, "truncated") {
+			t.Error("1000-rune line should NOT be truncated (limit is 2000 runes)")
+		}
+	})
+
+	t.Run("multibyte exceeding rune limit truncated at rune boundary", func(t *testing.T) {
+		// 2500 3-byte runes = 7500 bytes, 2500 runes — over 2000 limit
+		file := filepath.Join(tmp, "unicode_long.txt")
+		line := strings.Repeat("\u4e16", 2500)
+		os.WriteFile(file, []byte(line+"\n"), 0644)
+
+		result, _, _ := handler(context.Background(), nil, ViewArgs{Path: file})
+		text := resultText(result)
+		if !strings.Contains(text, "truncated") {
+			t.Error("2500-rune line should be truncated")
+		}
+		// Verify the output is valid UTF-8
+		if !utf8.ValidString(text) {
+			t.Error("truncated output must be valid UTF-8")
+		}
+		// Verify the truncation message reports rune count, not byte count
+		if !strings.Contains(text, "2500 chars total") {
+			t.Errorf("truncation message should report rune count 2500, got: %s", text)
 		}
 	})
 }

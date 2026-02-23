@@ -99,12 +99,12 @@ func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "grep",
 			Description: "Search file contents using regex patterns. Returns matching file paths (sorted by modification time), matching lines with context, or match counts.",
-		}, grepCompatHandler(sess, resolver))
+		}, grepCompatHandler(sess, resolver, cfg.MaxFileSize))
 	} else {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "grep",
 			Description: "Search file contents using regex patterns. Returns matching file paths (sorted by modification time), matching lines with context, or match counts.",
-		}, grepHandler(sess, resolver))
+		}, grepHandler(sess, resolver, cfg.MaxFileSize))
 	}
 
 	// Register find/Glob tool (always available, both modes, even with --no-bash)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
+	ignore "github.com/sabhiram/go-gitignore"
+
 	"github.com/mjkoo/boris/internal/pathscope"
 	"github.com/mjkoo/boris/internal/session"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -67,6 +70,7 @@ type grepParams struct {
 	offset          int
 	contextBefore   int
 	contextAfter    int
+	maxFileSize     int64
 }
 
 func normalizeGrepArgs(args GrepArgs) grepParams {
@@ -133,15 +137,19 @@ func normalizeGrepCompatArgs(args GrepCompatArgs) grepParams {
 	return p
 }
 
-func grepHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[GrepArgs, any] {
-	return func(_ context.Context, _ *mcp.CallToolRequest, args GrepArgs) (*mcp.CallToolResult, any, error) {
-		return doGrep(sess, resolver, normalizeGrepArgs(args))
+func grepHandler(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64) mcp.ToolHandlerFor[GrepArgs, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, args GrepArgs) (*mcp.CallToolResult, any, error) {
+		p := normalizeGrepArgs(args)
+		p.maxFileSize = maxFileSize
+		return doGrep(ctx, sess, resolver, p)
 	}
 }
 
-func grepCompatHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[GrepCompatArgs, any] {
-	return func(_ context.Context, _ *mcp.CallToolRequest, args GrepCompatArgs) (*mcp.CallToolResult, any, error) {
-		return doGrep(sess, resolver, normalizeGrepCompatArgs(args))
+func grepCompatHandler(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64) mcp.ToolHandlerFor[GrepCompatArgs, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, args GrepCompatArgs) (*mcp.CallToolResult, any, error) {
+		p := normalizeGrepCompatArgs(args)
+		p.maxFileSize = maxFileSize
+		return doGrep(ctx, sess, resolver, p)
 	}
 }
 
@@ -209,7 +217,7 @@ func isBinaryHeader(header []byte) bool {
 	return false
 }
 
-func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (*mcp.CallToolResult, any, error) {
+func doGrep(ctx context.Context, sess *session.Session, resolver *pathscope.Resolver, p grepParams) (*mcp.CallToolResult, any, error) {
 	// Validate pattern
 	if p.pattern == "" {
 		return toolErr(ErrInvalidInput, "pattern must not be empty")
@@ -290,7 +298,7 @@ func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (
 	}
 
 	if info.IsDir() {
-		return grepDirectory(resolver, sess, re, resolvedRoot, p, typePatterns)
+		return grepDirectory(ctx, resolver, sess, re, resolvedRoot, p, typePatterns)
 	}
 	return grepSingleFile(re, resolvedRoot, p.path, p, false)
 }
@@ -301,6 +309,20 @@ func doGrep(sess *session.Session, resolver *pathscope.Resolver, p grepParams) (
 func grepSingleFile(re *regexp.Regexp, filePath, displayPath string, p grepParams, isPartOfDirSearch bool) (*mcp.CallToolResult, any, error) {
 	if displayPath == "" {
 		displayPath = filePath
+	}
+
+	// Check file size before multiline read to prevent OOM
+	if p.multiline && p.maxFileSize > 0 {
+		info, err := os.Stat(filePath)
+		if err == nil && info.Size() > p.maxFileSize {
+			if isPartOfDirSearch {
+				// Silently skip oversized files during directory walk
+				return &mcp.CallToolResult{
+					Content: []mcp.Content{&mcp.TextContent{Text: ""}},
+				}, nil, nil
+			}
+			return toolErr(ErrFileTooLarge, "file %s is %d bytes, exceeds maximum %d bytes for multiline grep", displayPath, info.Size(), p.maxFileSize)
+		}
 	}
 
 	f, err := os.Open(filePath)
@@ -549,7 +571,7 @@ func formatContentLines(displayPath string, allLines []string, matchLineNums []i
 }
 
 // grepDirectory searches all files in a directory recursively.
-func grepDirectory(resolver *pathscope.Resolver, sess *session.Session, re *regexp.Regexp, rootPath string, p grepParams, typePatterns []string) (*mcp.CallToolResult, any, error) {
+func grepDirectory(ctx context.Context, resolver *pathscope.Resolver, sess *session.Session, re *regexp.Regexp, rootPath string, p grepParams, typePatterns []string) (*mcp.CallToolResult, any, error) {
 	// Gitignore support
 	gi := newGitignoreStack()
 
@@ -580,6 +602,12 @@ func grepDirectory(resolver *pathscope.Resolver, sess *session.Session, re *rege
 		if limitReached {
 			return nil
 		}
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
 		// Load gitignore at this level
 		gi.push(dir)
@@ -593,6 +621,12 @@ func grepDirectory(resolver *pathscope.Resolver, sess *session.Session, re *rege
 		for _, entry := range entries {
 			if limitReached {
 				return nil
+			}
+			// Check context cancellation per entry
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
 			}
 
 			name := entry.Name()
@@ -716,11 +750,11 @@ func grepDirectory(resolver *pathscope.Resolver, sess *session.Session, re *rege
 		return nil
 	}
 
-	if err := walkFn(rootPath); err != nil {
+	if err := walkFn(rootPath); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return toolErr(ErrIO, "could not walk directory %s: %v", rootPath, err)
 	}
 
-	// Build output
+	// Build output (may be partial if context was cancelled)
 	var output strings.Builder
 	switch p.outputMode {
 	case "files_with_matches":
@@ -790,6 +824,15 @@ func grepDirectory(resolver *pathscope.Resolver, sess *session.Session, re *rege
 
 // searchFile searches a single file and returns its lines, match line numbers, and count.
 func searchFile(re *regexp.Regexp, filePath string, p grepParams) ([]string, []int, int, error) {
+	// Check file size before multiline read to prevent OOM
+	if p.multiline && p.maxFileSize > 0 {
+		info, err := os.Stat(filePath)
+		if err == nil && info.Size() > p.maxFileSize {
+			// Silently skip oversized files in directory walk
+			return nil, nil, 0, nil
+		}
+	}
+
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, nil, 0, err
@@ -940,19 +983,23 @@ func (f fakeDirEntry) Type() fs.FileMode           { return f.info.Mode().Type()
 func (f fakeDirEntry) Info() (fs.FileInfo, error)   { return f.info, nil }
 
 // gitignoreStack manages a stack of gitignore matchers for nested directory traversal.
+// It uses sabhiram/go-gitignore for pattern compilation and matching, while keeping
+// our own stack management for nested .gitignore files during directory walks.
 type gitignoreStack struct {
-	stack []gitignoreMatcher
+	stack []gitignoreLevel
 }
 
-type gitignoreMatcher struct {
+// gitignoreLevel holds the parsed patterns from a single .gitignore file.
+type gitignoreLevel struct {
 	dir      string
-	patterns []gitignorePattern
+	patterns []gitignoreLevelPattern
 }
 
-type gitignorePattern struct {
-	pattern  string
-	negate   bool
-	dirOnly  bool
+// gitignoreLevelPattern holds a single parsed gitignore pattern with its matcher.
+type gitignoreLevelPattern struct {
+	matcher *ignore.GitIgnore
+	negate  bool
+	dirOnly bool
 }
 
 func newGitignoreStack() *gitignoreStack {
@@ -964,31 +1011,41 @@ func (g *gitignoreStack) push(dir string) {
 	data, err := os.ReadFile(gitignorePath)
 	if err != nil {
 		// No .gitignore at this level
-		g.stack = append(g.stack, gitignoreMatcher{dir: dir})
+		g.stack = append(g.stack, gitignoreLevel{dir: dir})
 		return
 	}
 
-	var patterns []gitignorePattern
+	var patterns []gitignoreLevelPattern
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		p := gitignorePattern{}
+
+		var negate bool
 		if strings.HasPrefix(line, "!") {
-			p.negate = true
+			negate = true
 			line = line[1:]
 		}
+
+		var dirOnly bool
 		if strings.HasSuffix(line, "/") {
-			p.dirOnly = true
+			dirOnly = true
 			line = strings.TrimSuffix(line, "/")
 		}
-		p.pattern = line
-		patterns = append(patterns, p)
+
+		// Compile the pattern using the library
+		matcher := ignore.CompileIgnoreLines(line)
+
+		patterns = append(patterns, gitignoreLevelPattern{
+			matcher: matcher,
+			negate:  negate,
+			dirOnly: dirOnly,
+		})
 	}
 
-	g.stack = append(g.stack, gitignoreMatcher{dir: dir, patterns: patterns})
+	g.stack = append(g.stack, gitignoreLevel{dir: dir, patterns: patterns})
 }
 
 func (g *gitignoreStack) pop() {
@@ -998,38 +1055,19 @@ func (g *gitignoreStack) pop() {
 }
 
 func (g *gitignoreStack) isIgnored(path string, isDir bool) bool {
-	// Process all gitignore levels, child overrides parent
+	// Process all gitignore levels, child overrides parent (last match wins)
 	ignored := false
 	for _, level := range g.stack {
 		for _, p := range level.patterns {
 			if p.dirOnly && !isDir {
 				continue
 			}
-			// Match against relative path from gitignore location
+			// Match against relative path from the gitignore's directory
 			relPath, err := filepath.Rel(level.dir, path)
 			if err != nil {
 				continue
 			}
-			// Try matching against basename and relative path
-			baseName := filepath.Base(path)
-			matched := false
-			if m, _ := doublestar.Match(p.pattern, baseName); m {
-				matched = true
-			}
-			if !matched {
-				if m, _ := doublestar.Match(p.pattern, relPath); m {
-					matched = true
-				}
-			}
-			if !matched {
-				// Also try with ** prefix for patterns without path separators
-				if !strings.Contains(p.pattern, "/") {
-					if m, _ := doublestar.Match("**/"+p.pattern, relPath); m {
-						matched = true
-					}
-				}
-			}
-			if matched {
+			if p.matcher.MatchesPath(relPath) {
 				if p.negate {
 					ignored = false
 				} else {

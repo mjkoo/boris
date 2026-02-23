@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 	"github.com/mjkoo/boris/internal/pathscope"
 	"github.com/mjkoo/boris/internal/session"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -207,12 +206,13 @@ func detectImage(header []byte, path string) (string, bool) {
 	return "", false
 }
 
-// truncateLine caps a single line at maxLineChars characters.
+// truncateLine caps a single line at maxLineChars runes.
 func truncateLine(line string) string {
-	if len(line) <= maxLineChars {
+	runes := []rune(line)
+	if len(runes) <= maxLineChars {
 		return line
 	}
-	return line[:maxLineChars] + fmt.Sprintf("... [truncated, %d chars total]", len(line))
+	return string(runes[:maxLineChars]) + fmt.Sprintf("... [truncated, %d chars total]", len(runes))
 }
 
 func formatLines(lines []string, startNum int) string {

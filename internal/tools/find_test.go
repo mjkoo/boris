@@ -854,7 +854,58 @@ func TestIntegrationGlobSchemaNoType(t *testing.T) {
 	t.Error("Glob tool not found in tool list")
 }
 
-// --- 7.4: Update existing integration tests ---
+// --- 7.4: Gitignore anchored pattern tests ---
+
+func TestFindGitignoreAnchoredPattern(t *testing.T) {
+	tmp, sess, resolver := findTestSetup(t)
+	os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("/build\n"), 0644)
+	os.MkdirAll(filepath.Join(tmp, "build"), 0755)
+	os.WriteFile(filepath.Join(tmp, "build", "out.txt"), []byte("x"), 0644)
+	os.MkdirAll(filepath.Join(tmp, "src", "build"), 0755)
+	os.WriteFile(filepath.Join(tmp, "src", "build", "out.txt"), []byte("x"), 0644)
+
+	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(r)
+	// src/build/out.txt should NOT be ignored (anchored pattern only applies at root)
+	if !strings.Contains(text, filepath.Join("src", "build", "out.txt")) {
+		t.Errorf("src/build/out.txt should NOT be ignored, got: %s", text)
+	}
+}
+
+// --- 7.5: Context cancellation tests ---
+
+func TestFindContextCancellationStopsWalk(t *testing.T) {
+	tmp, sess, resolver := findTestSetup(t)
+	// Create 100 directories with a file each
+	for i := 0; i < 100; i++ {
+		dir := filepath.Join(tmp, fmt.Sprintf("dir%03d", i))
+		os.MkdirAll(dir, 0755)
+		os.WriteFile(filepath.Join(dir, "file.txt"), []byte("x"), 0644)
+	}
+
+	// Cancel context immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	handler := findHandler(sess, resolver)
+	done := make(chan struct{})
+	go func() {
+		handler(ctx, nil, FindArgs{Pattern: "**/*.txt"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Handler returned — good
+	case <-time.After(5 * time.Second):
+		t.Fatal("find handler did not respect context cancellation within 5s")
+	}
+}
+
+// --- 7.5: Update existing integration tests ---
 // The existing integration tests in integration_test.go need updating.
 // These tests verify the new tool appears in tool lists.
 // Tests for exact tool list contents are handled by TestIntegrationFindInDefaultToolList

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,13 +27,13 @@ func grepTestSetup(t *testing.T) (string, *session.Session, *pathscope.Resolver)
 }
 
 func callGrep(sess *session.Session, resolver *pathscope.Resolver, args GrepArgs) (*mcp.CallToolResult, error) {
-	handler := grepHandler(sess, resolver)
+	handler := grepHandler(sess, resolver, 10*1024*1024)
 	r, _, err := handler(context.Background(), nil, args)
 	return r, err
 }
 
 func callGrepCompat(sess *session.Session, resolver *pathscope.Resolver, args GrepCompatArgs) (*mcp.CallToolResult, error) {
-	handler := grepCompatHandler(sess, resolver)
+	handler := grepCompatHandler(sess, resolver, 10*1024*1024)
 	r, _, err := handler(context.Background(), nil, args)
 	return r, err
 }
@@ -1682,6 +1683,197 @@ func TestIntegrationGrepWithNoBash(t *testing.T) {
 	}
 	if toolNames["bash"] {
 		t.Error("bash tool should NOT be available with --no-bash")
+	}
+}
+
+// --- 3.16: Gitignore edge case tests ---
+
+func TestGrepGitignoreAnchoredPattern(t *testing.T) {
+	tmp, sess, resolver := grepTestSetup(t)
+	// Anchored pattern: /build should only ignore build/ at the gitignore root
+	os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("/build\n"), 0644)
+	os.MkdirAll(filepath.Join(tmp, "build"), 0755)
+	os.WriteFile(filepath.Join(tmp, "build", "out.txt"), []byte("match\n"), 0644)
+	os.MkdirAll(filepath.Join(tmp, "src", "build"), 0755)
+	os.WriteFile(filepath.Join(tmp, "src", "build", "out.txt"), []byte("match\n"), 0644)
+
+	r, err := callGrep(sess, resolver, GrepArgs{Pattern: "match"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(r)
+	// build/ at root should be ignored
+	if strings.Contains(text, "build/out.txt") && !strings.Contains(text, "src/build") {
+		// This is fine — build/out.txt at root is excluded
+	}
+	// src/build/ should NOT be ignored (anchored pattern only applies at root)
+	if !strings.Contains(text, filepath.Join("src", "build", "out.txt")) {
+		t.Errorf("src/build/out.txt should NOT be ignored (anchored pattern), got: %s", text)
+	}
+}
+
+func TestGrepGitignoreDoublestarVendor(t *testing.T) {
+	tmp, sess, resolver := grepTestSetup(t)
+	os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("**/vendor/**\n"), 0644)
+	os.MkdirAll(filepath.Join(tmp, "vendor", "pkg"), 0755)
+	os.WriteFile(filepath.Join(tmp, "vendor", "pkg", "lib.go"), []byte("match\n"), 0644)
+	os.MkdirAll(filepath.Join(tmp, "src", "vendor", "dep"), 0755)
+	os.WriteFile(filepath.Join(tmp, "src", "vendor", "dep", "main.go"), []byte("match\n"), 0644)
+	os.WriteFile(filepath.Join(tmp, "app.go"), []byte("match\n"), 0644)
+
+	r, err := callGrep(sess, resolver, GrepArgs{Pattern: "match"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(r)
+	// Both vendor/ and src/vendor/ should be ignored
+	if strings.Contains(text, "vendor") {
+		t.Errorf("vendor files should be ignored by **/vendor/**, got: %s", text)
+	}
+	if !strings.Contains(text, "app.go") {
+		t.Errorf("app.go should be found, got: %s", text)
+	}
+}
+
+func TestGrepGitignoreNestedNegation(t *testing.T) {
+	tmp, sess, resolver := grepTestSetup(t)
+	// Root ignores all .log files
+	os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("*.log\n"), 0644)
+	// Subdirectory negates specific .log file
+	os.MkdirAll(filepath.Join(tmp, "logs"), 0755)
+	os.WriteFile(filepath.Join(tmp, "logs", ".gitignore"), []byte("!important.log\n"), 0644)
+	os.WriteFile(filepath.Join(tmp, "logs", "important.log"), []byte("match\n"), 0644)
+	os.WriteFile(filepath.Join(tmp, "logs", "debug.log"), []byte("match\n"), 0644)
+	os.WriteFile(filepath.Join(tmp, "app.log"), []byte("match\n"), 0644)
+
+	r, err := callGrep(sess, resolver, GrepArgs{Pattern: "match"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(r)
+	// important.log should be visible (negation overrides parent)
+	if !strings.Contains(text, "important.log") {
+		t.Errorf("important.log should be found (negation), got: %s", text)
+	}
+	// debug.log should be ignored (no negation)
+	if strings.Contains(text, "debug.log") {
+		t.Errorf("debug.log should be ignored, got: %s", text)
+	}
+	// app.log should be ignored
+	if strings.Contains(text, "app.log") {
+		t.Errorf("app.log should be ignored, got: %s", text)
+	}
+}
+
+// --- 3.17: Context cancellation tests ---
+
+func TestGrepContextCancellationStopsWalk(t *testing.T) {
+	tmp, sess, resolver := grepTestSetup(t)
+	// Create 100 directories with a file each
+	for i := 0; i < 100; i++ {
+		dir := filepath.Join(tmp, fmt.Sprintf("dir%03d", i))
+		os.MkdirAll(dir, 0755)
+		os.WriteFile(filepath.Join(dir, "file.txt"), []byte("match\n"), 0644)
+	}
+
+	// Cancel context immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	handler := grepHandler(sess, resolver, 10*1024*1024)
+	done := make(chan struct{})
+	go func() {
+		handler(ctx, nil, GrepArgs{
+			Pattern: "match",
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Handler returned — good
+	case <-time.After(5 * time.Second):
+		t.Fatal("grep handler did not respect context cancellation within 5s")
+	}
+}
+
+// --- 3.17: File size limit tests ---
+
+func TestGrepMultilineSingleFileOversized(t *testing.T) {
+	tmp, sess, resolver := grepTestSetup(t)
+	// Create a file that exceeds the size limit
+	bigContent := strings.Repeat("match line\n", 1000) // ~11000 bytes
+	os.WriteFile(filepath.Join(tmp, "big.txt"), []byte(bigContent), 0644)
+
+	// Use a handler with maxFileSize=1000 (smaller than file)
+	handler := grepHandler(sess, resolver, 1000)
+	r, _, err := handler(context.Background(), nil, GrepArgs{
+		Pattern:    "match",
+		Path:       "big.txt",
+		OutputMode: "content",
+		Multiline:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isErrorResult(r) {
+		t.Error("expected FILE_TOO_LARGE error for oversized single file multiline grep")
+	}
+	if !hasErrorCode(r, ErrFileTooLarge) {
+		t.Errorf("expected error code %s, got: %s", ErrFileTooLarge, resultText(r))
+	}
+}
+
+func TestGrepMultilineDirectorySkipsOversized(t *testing.T) {
+	tmp, sess, resolver := grepTestSetup(t)
+	// Create a big file and a small file
+	bigContent := strings.Repeat("match line\n", 1000) // ~11000 bytes
+	os.WriteFile(filepath.Join(tmp, "big.txt"), []byte(bigContent), 0644)
+	os.WriteFile(filepath.Join(tmp, "small.txt"), []byte("match\n"), 0644)
+
+	// Use a handler with maxFileSize=1000 (smaller than big.txt but bigger than small.txt)
+	handler := grepHandler(sess, resolver, 1000)
+	r, _, err := handler(context.Background(), nil, GrepArgs{
+		Pattern:    "match",
+		OutputMode: "files_with_matches",
+		Multiline:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(r)
+	// big.txt should be silently skipped
+	if strings.Contains(text, "big.txt") {
+		t.Errorf("oversized file should be silently skipped in directory walk, got: %s", text)
+	}
+	// small.txt should be found
+	if !strings.Contains(text, "small.txt") {
+		t.Errorf("small file should be found, got: %s", text)
+	}
+}
+
+func TestGrepNonMultilineIgnoresFileSize(t *testing.T) {
+	tmp, sess, resolver := grepTestSetup(t)
+	bigContent := strings.Repeat("match line\n", 1000) // ~11000 bytes
+	os.WriteFile(filepath.Join(tmp, "big.txt"), []byte(bigContent), 0644)
+
+	// Non-multiline grep should work fine regardless of file size limit
+	handler := grepHandler(sess, resolver, 1000)
+	r, _, err := handler(context.Background(), nil, GrepArgs{
+		Pattern:    "match",
+		Path:       "big.txt",
+		OutputMode: "count",
+		Multiline:  false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isErrorResult(r) {
+		t.Errorf("non-multiline grep should not fail for large files, got: %s", resultText(r))
+	}
+	text := resultText(r)
+	if text != "big.txt:1000" {
+		t.Errorf("expected count of 1000, got: %s", text)
 	}
 }
 

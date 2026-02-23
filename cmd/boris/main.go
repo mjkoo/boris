@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/mjkoo/boris/internal/pathscope"
@@ -76,6 +77,8 @@ type CLI struct {
 	NoBash          bool        `help:"Disable bash tool." env:"BORIS_NO_BASH"`
 	MaxFileSize     string      `help:"Max file size for view/create." default:"10MB" env:"BORIS_MAX_FILE_SIZE"`
 	AnthropicCompat bool        `help:"Expose combined str_replace_editor tool schema." env:"BORIS_ANTHROPIC_COMPAT"`
+	LogLevel        string      `help:"Log level: debug, info, warn, error." default:"info" enum:"debug,info,warn,error" env:"BORIS_LOG_LEVEL"`
+	LogFormat       string      `help:"Log format: text or json." default:"text" enum:"text,json" env:"BORIS_LOG_FORMAT"`
 }
 
 // Validate is called by kong after parsing to enforce flag constraints.
@@ -130,6 +133,22 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 	})
 }
 
+// parseLogLevel converts a log level string to a slog.Level.
+func parseLogLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(s) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("unknown log level %q", s)
+	}
+}
+
 func main() {
 	var cli CLI
 	kong.Parse(&cli,
@@ -138,19 +157,38 @@ func main() {
 		kong.Vars{"version": versionInfo()},
 	)
 
+	// Initialize structured logging
+	logLevel, err := parseLogLevel(cli.LogLevel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid --log-level: %v\n", err)
+		os.Exit(1)
+	}
+	var logHandler slog.Handler
+	opts := &slog.HandlerOptions{Level: logLevel}
+	switch cli.LogFormat {
+	case "json":
+		logHandler = slog.NewJSONHandler(os.Stderr, opts)
+	default:
+		logHandler = slog.NewTextHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(logHandler))
+
 	maxFileSize, err := parseSize(cli.MaxFileSize)
 	if err != nil {
-		log.Fatalf("invalid --max-file-size: %v", err)
+		slog.Error("invalid --max-file-size", "error", err)
+		os.Exit(1)
 	}
 
 	// Resolve workdir
 	workdir, err := filepath.Abs(cli.Workdir)
 	if err != nil {
-		log.Fatalf("invalid --workdir: %v", err)
+		slog.Error("invalid --workdir", "error", err)
+		os.Exit(1)
 	}
 	workdir, err = filepath.EvalSymlinks(workdir)
 	if err != nil {
-		log.Fatalf("invalid --workdir: %v", err)
+		slog.Error("invalid --workdir", "error", err)
+		os.Exit(1)
 	}
 
 	// Detect shell
@@ -158,12 +196,13 @@ func main() {
 	if _, err := os.Stat("/bin/bash"); err == nil {
 		shell = "/bin/bash"
 	}
-	log.Printf("using shell: %s", shell)
+	slog.Info("using shell", "shell", shell)
 
 	// Create path resolver
 	resolver, err := pathscope.NewResolver(cli.AllowDir, cli.DenyDir)
 	if err != nil {
-		log.Fatalf("invalid path scoping config: %v", err)
+		slog.Error("invalid path scoping config", "error", err)
+		os.Exit(1)
 	}
 
 	cfg := serverConfig{
@@ -191,9 +230,10 @@ func main() {
 		var err error
 		token, err = generateToken()
 		if err != nil {
-			log.Fatalf("failed to generate token: %v", err)
+			slog.Error("failed to generate token", "error", err)
+			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "bearer token: %s\n", token)
+		slog.Info("generated bearer token", "token", token)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -205,6 +245,25 @@ func main() {
 	case "stdio":
 		runSTDIO(ctx, cfg)
 	}
+}
+
+// corsMiddleware adds permissive CORS headers for browser-based MCP clients.
+// Non-browser clients ignore these headers, so there's no downside.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id")
+		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // buildMux creates the HTTP mux with /mcp and /health routes.
@@ -229,32 +288,36 @@ func runHTTP(ctx context.Context, cfg serverConfig, port int, token string) {
 	if token != "" {
 		mcpHandler = bearerAuthMiddleware(token, mcpHandler)
 	}
-
 	mux := buildMux(mcpHandler)
 
 	addr := fmt.Sprintf(":%d", port)
-	log.Printf("boris listening on %s (HTTP)", addr)
+	slog.Info("boris listening", "addr", addr, "transport", "http")
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Addr: addr, Handler: corsMiddleware(mux)}
 	go func() {
 		<-ctx.Done()
-		srv.Close()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("shutdown error", "error", err)
+		}
 	}()
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server error: %v", err)
+		slog.Error("server error", "error", err)
+		os.Exit(1)
 	}
 }
 
 func runSTDIO(ctx context.Context, cfg serverConfig) {
-	log.SetOutput(os.Stderr) // Keep stdout clean for MCP
-	log.Println("boris running on stdio")
+	slog.Info("boris running", "transport", "stdio")
 
 	server := mcp.NewServer(cfg.impl, nil)
 	sess := session.New(cfg.workdir)
 	tools.RegisterAll(server, cfg.resolver, sess, cfg.toolsCfg)
 
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
-		log.Fatalf("server error: %v", err)
+		slog.Error("server error", "error", err)
+		os.Exit(1)
 	}
 }
 

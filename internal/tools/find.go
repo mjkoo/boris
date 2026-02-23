@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -49,20 +50,20 @@ func normalizeFindCompatArgs(args FindCompatArgs) findParams {
 }
 
 func findHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[FindArgs, any] {
-	return func(_ context.Context, _ *mcp.CallToolRequest, args FindArgs) (*mcp.CallToolResult, any, error) {
-		return doFind(sess, resolver, normalizeFindArgs(args))
+	return func(ctx context.Context, _ *mcp.CallToolRequest, args FindArgs) (*mcp.CallToolResult, any, error) {
+		return doFind(ctx, sess, resolver, normalizeFindArgs(args))
 	}
 }
 
 func findCompatHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[FindCompatArgs, any] {
-	return func(_ context.Context, _ *mcp.CallToolRequest, args FindCompatArgs) (*mcp.CallToolResult, any, error) {
-		return doFind(sess, resolver, normalizeFindCompatArgs(args))
+	return func(ctx context.Context, _ *mcp.CallToolRequest, args FindCompatArgs) (*mcp.CallToolResult, any, error) {
+		return doFind(ctx, sess, resolver, normalizeFindCompatArgs(args))
 	}
 }
 
 const findMaxOutputChars = 30000
 
-func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (*mcp.CallToolResult, any, error) {
+func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Resolver, p findParams) (*mcp.CallToolResult, any, error) {
 	// Validate pattern
 	if p.pattern == "" {
 		return toolErr(ErrInvalidInput, "pattern must not be empty")
@@ -111,6 +112,13 @@ func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (
 
 	var walkFn func(dir string) error
 	walkFn = func(dir string) error {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		gi.push(dir)
 		defer gi.pop()
 
@@ -120,6 +128,13 @@ func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (
 		}
 
 		for _, entry := range entries {
+			// Check context cancellation per entry
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			name := entry.Name()
 			entryPath := filepath.Join(dir, name)
 
@@ -209,7 +224,7 @@ func doFind(sess *session.Session, resolver *pathscope.Resolver, p findParams) (
 		return nil
 	}
 
-	if err := walkFn(resolvedRoot); err != nil {
+	if err := walkFn(resolvedRoot); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return toolErr(ErrIO, "could not walk directory %s: %v", p.path, err)
 	}
 
