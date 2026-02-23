@@ -32,8 +32,13 @@ type BashArgs struct {
 func bashHandler(sess *session.Session, cfg Config) mcp.ToolHandlerFor[BashArgs, any] {
 	// Convert CLI --timeout (seconds) to milliseconds for the default.
 	defaultTimeoutMs := cfg.DefaultTimeout * 1000
+	var regOnce sync.Once
 
 	return func(ctx context.Context, req *mcp.CallToolRequest, args BashArgs) (*mcp.CallToolResult, any, error) {
+		if cfg.RegisterSession != nil && req != nil && req.Session != nil {
+			regOnce.Do(func() { cfg.RegisterSession(req.Session.ID()) })
+		}
+
 		if strings.TrimSpace(args.Command) == "" {
 			return toolErr(ErrBashEmptyCommand, "command must not be empty")
 		}
@@ -80,12 +85,14 @@ func runForeground(ctx context.Context, req *mcp.CallToolRequest, sess *session.
 
 	pgid := cmd.Process.Pid
 	var timedOut atomic.Bool
+	var killTimer atomic.Pointer[time.Timer]
 	timer := time.AfterFunc(time.Duration(timeoutMs)*time.Millisecond, func() {
 		timedOut.Store(true)
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)
-		time.AfterFunc(5*time.Second, func() {
+		kt := time.AfterFunc(5*time.Second, func() {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		})
+		killTimer.Store(kt)
 	})
 
 	// Collect output via scanners, sending progress notifications
@@ -110,6 +117,9 @@ func runForeground(ctx context.Context, req *mcp.CallToolRequest, sess *session.
 
 	waitErr := cmd.Wait()
 	timer.Stop()
+	if kt := killTimer.Load(); kt != nil {
+		kt.Stop()
+	}
 
 	exitCode := 0
 	if waitErr != nil {
@@ -204,6 +214,21 @@ func runBackground(sess *session.Session, cfg Config, cwd, command string) (*mcp
 		return toolErr(ErrBashTaskLimit, "could not add background task: %v", err)
 	}
 
+	// Optional safety-net timeout for background tasks.
+	var bgTimer *time.Timer
+	var bgKillTimer atomic.Pointer[time.Timer]
+	if cfg.BgTimeout > 0 {
+		pgid := cmd.Process.Pid
+		bgTimer = time.AfterFunc(time.Duration(cfg.BgTimeout)*time.Second, func() {
+			task.SetTimedOut()
+			_ = syscall.Kill(-pgid, syscall.SIGTERM)
+			kt := time.AfterFunc(5*time.Second, func() {
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			})
+			bgKillTimer.Store(kt)
+		})
+	}
+
 	// Wait for completion in background goroutine
 	go func() {
 		defer close(task.Done)
@@ -212,6 +237,12 @@ func runBackground(sess *session.Session, cfg Config, cwd, command string) (*mcp
 			if exitErr, ok := waitErr.(*exec.ExitError); ok {
 				task.ExitCode = exitErr.ExitCode()
 			}
+		}
+		if bgTimer != nil {
+			bgTimer.Stop()
+		}
+		if kt := bgKillTimer.Load(); kt != nil {
+			kt.Stop()
 		}
 	}()
 
@@ -226,8 +257,13 @@ type TaskOutputArgs struct {
 	TaskID string `json:"task_id" jsonschema:"the task ID returned by a background bash command"`
 }
 
-func taskOutputHandler(sess *session.Session) mcp.ToolHandlerFor[TaskOutputArgs, any] {
-	return func(_ context.Context, _ *mcp.CallToolRequest, args TaskOutputArgs) (*mcp.CallToolResult, any, error) {
+func taskOutputHandler(sess *session.Session, cfg Config) mcp.ToolHandlerFor[TaskOutputArgs, any] {
+	var regOnce sync.Once
+	return func(_ context.Context, req *mcp.CallToolRequest, args TaskOutputArgs) (*mcp.CallToolResult, any, error) {
+		if cfg.RegisterSession != nil && req != nil && req.Session != nil {
+			regOnce.Do(func() { cfg.RegisterSession(req.Session.ID()) })
+		}
+
 		task, ok := sess.GetTask(args.TaskID)
 		if !ok {
 			return toolErr(ErrBashTaskNotFound, "task not found: %s", args.TaskID)
@@ -240,7 +276,11 @@ func taskOutputHandler(sess *session.Session) mcp.ToolHandlerFor[TaskOutputArgs,
 			stdoutStr := truncateOutput(task.Stdout.String())
 			stderrStr := truncateOutput(task.Stderr.String())
 
-			fmt.Fprintf(&result, "status: completed\nexit_code: %d\n", task.ExitCode)
+			if task.TimedOut() {
+				fmt.Fprintf(&result, "status: completed (killed by background task timeout)\nexit_code: %d\n", task.ExitCode)
+			} else {
+				fmt.Fprintf(&result, "status: completed\nexit_code: %d\n", task.ExitCode)
+			}
 			if stderrStr != "" {
 				fmt.Fprintf(&result, "\nstderr:\n%s", stderrStr)
 			}

@@ -78,6 +78,12 @@ type Config struct {
 	DefaultTimeout  int
 	Shell           string
 	AnthropicCompat bool
+	BgTimeout       int // background task safety-net timeout in seconds (0 = disabled)
+
+	// RegisterSession is called on first bash/task_output invocation with the
+	// SDK session ID. In HTTP mode this registers the Boris session in the
+	// SessionRegistry for lifecycle cleanup. Nil in STDIO mode.
+	RegisterSession func(sessionID string)
 }
 
 // RegisterAll registers all tools with the MCP server.
@@ -91,7 +97,7 @@ func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "task_output",
 			Description: "Retrieve output from a running or completed background bash command by task_id. Running tasks return current output with status: running. Completed tasks return final output, exit code, and are cleaned up after retrieval.",
-		}, taskOutputHandler(sess))
+		}, taskOutputHandler(sess, cfg))
 	}
 
 	// Register grep tool (always available, both modes, even with --no-bash)

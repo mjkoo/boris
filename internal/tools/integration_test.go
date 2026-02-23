@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mjkoo/boris/internal/pathscope"
@@ -23,6 +24,7 @@ func TestIntegrationToolLifecycle(t *testing.T) {
 	}, nil)
 
 	sess := session.New(tmp)
+	t.Cleanup(sess.Close)
 	resolver, err := pathscope.NewResolver([]string{tmp}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -285,6 +287,89 @@ func TestIntegrationAnthropicCompat(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for 'view' tool in anthropic-compat mode (should not exist)")
+	}
+}
+
+func TestIntegrationRegistrationCallback(t *testing.T) {
+	tmp := t.TempDir()
+
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "boris-test",
+		Version: "test",
+	}, nil)
+
+	sess := session.New(tmp)
+	t.Cleanup(sess.Close)
+	resolver, err := pathscope.NewResolver([]string{tmp}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var regCount atomic.Int32
+	cfg := tools.Config{
+		MaxFileSize:    10 * 1024 * 1024,
+		DefaultTimeout: 30,
+		Shell:          "/bin/sh",
+		RegisterSession: func(sessionID string) {
+			regCount.Add(1)
+		},
+	}
+	tools.RegisterAll(server, resolver, sess, cfg)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	clientSession, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	// First bash call — callback should fire.
+	res, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "bash",
+		Arguments: map[string]interface{}{"command": "echo hello"},
+	})
+	if err != nil {
+		t.Fatalf("bash call failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("bash returned error: %s", contentText(res))
+	}
+	if got := regCount.Load(); got != 1 {
+		t.Errorf("after first bash call: regCount = %d, want 1", got)
+	}
+
+	// Second bash call — callback should NOT fire again (sync.Once).
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "bash",
+		Arguments: map[string]interface{}{"command": "echo again"},
+	})
+	if err != nil {
+		t.Fatalf("second bash call failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("second bash returned error: %s", contentText(res))
+	}
+	if got := regCount.Load(); got != 1 {
+		t.Errorf("after second bash call: regCount = %d, want 1", got)
+	}
+
+	// First task_output call — separate regOnce, callback fires again.
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "task_output",
+		Arguments: map[string]interface{}{"task_id": "nonexistent"},
+	})
+	if err != nil {
+		t.Fatalf("task_output call failed: %v", err)
+	}
+	// task_output returns an error for unknown task_id, but the callback
+	// should still have fired.
+	if got := regCount.Load(); got != 2 {
+		t.Errorf("after task_output call: regCount = %d, want 2", got)
 	}
 }
 

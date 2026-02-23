@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 // SyncBuffer is a concurrency-safe buffer that implements io.Writer.
@@ -37,15 +40,24 @@ type BackgroundTask struct {
 	Stderr   *SyncBuffer
 	Done     chan struct{}
 	ExitCode int
+	timedOut atomic.Bool // set when the safety-net timeout kills this task
 }
+
+// SetTimedOut marks the task as killed by the safety-net timeout.
+func (t *BackgroundTask) SetTimedOut() { t.timedOut.Store(true) }
+
+// TimedOut reports whether the task was killed by the safety-net timeout.
+func (t *BackgroundTask) TimedOut() bool { return t.timedOut.Load() }
 
 // Session holds per-session state including the tracked working directory,
 // a random nonce for sentinel generation, and background task tracking.
 type Session struct {
-	mu    sync.Mutex
-	cwd   string
-	nonce string
-	tasks map[string]*BackgroundTask
+	mu        sync.Mutex
+	cwd       string
+	nonce     string
+	tasks     map[string]*BackgroundTask
+	closed    bool
+	closeOnce sync.Once
 }
 
 // New creates a Session with the given initial working directory.
@@ -85,10 +97,14 @@ func (s *Session) SetCwd(cwd string) {
 	s.cwd = cwd
 }
 
-// AddTask stores a background task. Returns an error if the limit is reached.
+// AddTask stores a background task. Returns an error if the session is
+// closed or the limit is reached.
 func (s *Session) AddTask(task *BackgroundTask) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("session is closed")
+	}
 	if len(s.tasks) >= 10 {
 		return fmt.Errorf("maximum concurrent background task limit (10) reached")
 	}
@@ -116,4 +132,40 @@ func (s *Session) TaskCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.tasks)
+}
+
+// Close terminates all running background tasks and marks the session as
+// closed. For each running task, it sends SIGTERM to the process group,
+// waits up to 5 seconds, then sends SIGKILL if the process is still alive.
+// Close is idempotent — subsequent calls have no effect.
+func (s *Session) Close() {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		tasks := make([]*BackgroundTask, 0, len(s.tasks))
+		for _, t := range s.tasks {
+			tasks = append(tasks, t)
+		}
+		s.closed = true
+		s.tasks = make(map[string]*BackgroundTask)
+		s.mu.Unlock()
+
+		for _, t := range tasks {
+			select {
+			case <-t.Done:
+				continue // already finished
+			default:
+			}
+
+			pgid := t.Cmd.Process.Pid
+			_ = syscall.Kill(-pgid, syscall.SIGTERM)
+
+			// Wait up to 5 seconds for graceful exit, then SIGKILL.
+			select {
+			case <-t.Done:
+			case <-time.After(5 * time.Second):
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+				<-t.Done
+			}
+		}
+	})
 }

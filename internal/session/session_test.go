@@ -1,9 +1,12 @@
 package session
 
 import (
+	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestNew(t *testing.T) {
@@ -128,4 +131,132 @@ func TestBackgroundTasks(t *testing.T) {
 			s.RemoveTask(string(rune('0' + i)))
 		}
 	})
+}
+
+// startSleepTask starts a real "sleep" process as a background task with
+// process group isolation, matching how bash.go launches background tasks.
+func startSleepTask(t *testing.T, id string) *BackgroundTask {
+	t.Helper()
+	cmd := exec.Command("sleep", "300")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start sleep process: %v", err)
+	}
+	task := &BackgroundTask{
+		ID:   id,
+		Cmd:  cmd,
+		Done: make(chan struct{}),
+	}
+	go func() {
+		defer close(task.Done)
+		_ = cmd.Wait()
+	}()
+	return task
+}
+
+func TestCloseKillsRunningTasks(t *testing.T) {
+	s := New("/workspace")
+
+	task1 := startSleepTask(t, "t1")
+	task2 := startSleepTask(t, "t2")
+	task3 := startSleepTask(t, "t3")
+	for _, task := range []*BackgroundTask{task1, task2, task3} {
+		if err := s.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s.Close()
+
+	// All tasks should be done after Close returns.
+	for _, task := range []*BackgroundTask{task1, task2, task3} {
+		select {
+		case <-task.Done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("task %s still running after Close", task.ID)
+		}
+	}
+
+	if s.TaskCount() != 0 {
+		t.Errorf("expected 0 tasks after Close, got %d", s.TaskCount())
+	}
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	s := New("/workspace")
+	task := startSleepTask(t, "t1")
+	if err := s.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Close()
+	// Second call should not panic or block.
+	s.Close()
+
+	select {
+	case <-task.Done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("task still running after Close")
+	}
+}
+
+func TestCloseSkipsCompletedTasks(t *testing.T) {
+	s := New("/workspace")
+
+	// Start a task that completes immediately.
+	cmd := exec.Command("true")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	task := &BackgroundTask{ID: "completed", Cmd: cmd, Done: done}
+	go func() {
+		defer close(done)
+		_ = cmd.Wait()
+	}()
+
+	// Wait for it to finish.
+	<-done
+
+	if err := s.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+
+	// Close should not block or error on the already-completed task.
+	s.Close()
+}
+
+func TestAddTaskRejectedAfterClose(t *testing.T) {
+	s := New("/workspace")
+	s.Close()
+
+	err := s.AddTask(&BackgroundTask{ID: "late", Done: make(chan struct{})})
+	if err == nil {
+		t.Error("expected error adding task to closed session")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Errorf("expected 'closed' in error message, got: %v", err)
+	}
+}
+
+func TestCloseConcurrentSafety(t *testing.T) {
+	s := New("/workspace")
+	for i := 0; i < 3; i++ {
+		task := startSleepTask(t, string(rune('a'+i)))
+		if err := s.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.Close()
+		}()
+	}
+	wg.Wait()
+	// No race detector failure means success.
 }

@@ -1,25 +1,4 @@
-### Requirement: Working directory persistence via pwd sentinel
-The bash tool SHALL track the working directory across calls within a session. Each command SHALL be executed as `cd <tracked_cwd> && <user_command> ; echo '<sentinel>' ; pwd`. The sentinel SHALL include a random nonce generated per session (e.g., `__BORIS_CWD_a3f7c210__`) to prevent collision with user output. After execution, the tool SHALL parse the sentinel and pwd output from the end of stdout to determine the new working directory. The sentinel and pwd lines SHALL be stripped from the returned stdout.
-
-#### Scenario: cd changes persist across calls
-- **WHEN** the tool is called with `command: "cd /tmp"` followed by `command: "pwd"`
-- **THEN** the second call returns stdout containing `/tmp`
-
-#### Scenario: Sentinel is stripped from output
-- **WHEN** the tool is called with `command: "echo hello"`
-- **THEN** the returned stdout contains `hello` and does not contain the sentinel string or the pwd output
-
-#### Scenario: Missing sentinel preserves previous cwd
-- **WHEN** a command is killed by timeout before the sentinel is printed
-- **THEN** the tracked working directory remains unchanged from before that command
-
-#### Scenario: Sentinel nonce prevents collision
-- **WHEN** a command outputs text containing `__BORIS_CWD__` (the old sentinel format without nonce)
-- **THEN** the parser does not misinterpret it as the sentinel because the actual sentinel includes a session-specific nonce
-
-#### Scenario: CWD isolated between connections
-- **WHEN** client A runs `cd /tmp` and client B runs `pwd` on the same boris HTTP server
-- **THEN** client B sees the initial `--workdir` value, not `/tmp`
+## MODIFIED Requirements
 
 ### Requirement: Background command execution
 When `run_in_background` is true, the bash tool SHALL start the command, store a reference in session state, and return immediately with a `task_id` string in the response. The command SHALL continue running in the background. A maximum of 10 concurrent background tasks per session SHALL be enforced. If the session has been closed, the tool SHALL return an error instead of starting the command.

@@ -75,6 +75,7 @@ type CLI struct {
 	Token           string      `help:"Bearer token for HTTP authentication." env:"BORIS_TOKEN"`
 	GenerateToken   bool        `help:"Generate a random bearer token on startup." env:"BORIS_GENERATE_TOKEN"`
 	NoBash          bool        `help:"Disable bash tool." env:"BORIS_NO_BASH"`
+	BgTimeout       int         `help:"Background task safety-net timeout in seconds (0=disabled)." default:"0" env:"BORIS_BG_TIMEOUT"`
 	MaxFileSize     string      `help:"Max file size for view/create." default:"10MB" env:"BORIS_MAX_FILE_SIZE"`
 	AnthropicCompat bool        `help:"Expose combined str_replace_editor tool schema." env:"BORIS_ANTHROPIC_COMPAT"`
 	LogLevel        string      `help:"Log level: debug, info, warn, error." default:"info" enum:"debug,info,warn,error" env:"BORIS_LOG_LEVEL"`
@@ -218,6 +219,7 @@ func main() {
 			DefaultTimeout:  cli.Timeout,
 			Shell:           shell,
 			AnthropicCompat: cli.AnthropicCompat,
+			BgTimeout:       cli.BgTimeout,
 		},
 	}
 
@@ -278,12 +280,22 @@ func buildMux(mcpHandler http.Handler) *http.ServeMux {
 }
 
 func runHTTP(ctx context.Context, cfg serverConfig, port int, token string) {
+	registry := session.NewRegistry()
+	store := &session.SessionCleanupStore{Registry: registry}
+
 	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server {
 		server := mcp.NewServer(cfg.impl, nil)
 		sess := session.New(cfg.workdir)
-		tools.RegisterAll(server, cfg.resolver, sess, cfg.toolsCfg)
+		toolsCfg := cfg.toolsCfg
+		toolsCfg.RegisterSession = func(sessionID string) {
+			registry.Register(sessionID, sess)
+		}
+		tools.RegisterAll(server, cfg.resolver, sess, toolsCfg)
 		return server
-	}, nil)
+	}, &mcp.StreamableHTTPOptions{
+		SessionTimeout: 10 * time.Minute,
+		EventStore:     store,
+	})
 
 	if token != "" {
 		mcpHandler = bearerAuthMiddleware(token, mcpHandler)
@@ -301,6 +313,9 @@ func runHTTP(ctx context.Context, cfg serverConfig, port int, token string) {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Error("shutdown error", "error", err)
 		}
+		// Clean up any sessions not yet closed by the SDK, killing orphan
+		// background processes that would otherwise survive server shutdown.
+		registry.CloseAll()
 	}()
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server error", "error", err)
@@ -313,6 +328,7 @@ func runSTDIO(ctx context.Context, cfg serverConfig) {
 
 	server := mcp.NewServer(cfg.impl, nil)
 	sess := session.New(cfg.workdir)
+	defer sess.Close()
 	tools.RegisterAll(server, cfg.resolver, sess, cfg.toolsCfg)
 
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {

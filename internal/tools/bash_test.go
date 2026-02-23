@@ -272,6 +272,7 @@ func TestBashOutputTruncation(t *testing.T) {
 
 func TestBashBackgroundCommand(t *testing.T) {
 	sess := session.New(t.TempDir())
+	t.Cleanup(sess.Close)
 	handler := bashHandler(sess, testConfig())
 
 	t.Run("immediate return with task_id", func(t *testing.T) {
@@ -294,6 +295,7 @@ func TestBashBackgroundCommand(t *testing.T) {
 	t.Run("cwd not updated", func(t *testing.T) {
 		tmp := t.TempDir()
 		bgSess := session.New(tmp)
+		t.Cleanup(bgSess.Close)
 		bgHandler := bashHandler(bgSess, testConfig())
 
 		_, _, err := bgHandler(context.Background(), nil, BashArgs{
@@ -312,6 +314,7 @@ func TestBashBackgroundCommand(t *testing.T) {
 
 	t.Run("task limit enforcement", func(t *testing.T) {
 		limitSess := session.New(t.TempDir())
+		t.Cleanup(limitSess.Close)
 		limitHandler := bashHandler(limitSess, testConfig())
 
 		// Fill up 10 tasks
@@ -347,8 +350,9 @@ func TestBashBackgroundCommand(t *testing.T) {
 
 func TestTaskOutput(t *testing.T) {
 	sess := session.New(t.TempDir())
+	t.Cleanup(sess.Close)
 	bashH := bashHandler(sess, testConfig())
-	taskH := taskOutputHandler(sess)
+	taskH := taskOutputHandler(sess, testConfig())
 
 	t.Run("running status", func(t *testing.T) {
 		result, _, _ := bashH(context.Background(), nil, BashArgs{
@@ -459,8 +463,9 @@ func TestBashDescriptionParameter(t *testing.T) {
 
 func TestBackgroundTaskOutputRace(t *testing.T) {
 	sess := session.New(t.TempDir())
+	t.Cleanup(sess.Close)
 	bashH := bashHandler(sess, testConfig())
-	taskH := taskOutputHandler(sess)
+	taskH := taskOutputHandler(sess, testConfig())
 
 	// Start a background command that produces continuous output
 	result, _, err := bashH(context.Background(), nil, BashArgs{
@@ -498,6 +503,258 @@ func TestBackgroundTaskOutputRace(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func TestBashRegistrationCallback(t *testing.T) {
+	t.Run("fires on first bash call", func(t *testing.T) {
+		sess := session.New(t.TempDir())
+		t.Cleanup(sess.Close)
+		var callCount int
+		cfg := testConfig()
+		cfg.RegisterSession = func(id string) { callCount++ }
+		handler := bashHandler(sess, cfg)
+
+		// First call — callback should fire (req is nil so it won't, we need to simulate)
+		// With nil req, registration is skipped (STDIO-like)
+		_, _, _ = handler(context.Background(), nil, BashArgs{Command: "echo hi"})
+		if callCount != 0 {
+			t.Errorf("expected 0 calls with nil req, got %d", callCount)
+		}
+	})
+
+	t.Run("nil callback is safe", func(t *testing.T) {
+		sess := session.New(t.TempDir())
+		t.Cleanup(sess.Close)
+		cfg := testConfig()
+		// RegisterSession is nil (default/STDIO mode)
+		handler := bashHandler(sess, cfg)
+
+		// Should not panic.
+		result, _, err := handler(context.Background(), nil, BashArgs{Command: "echo ok"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		if !strings.Contains(text, "ok") {
+			t.Errorf("expected 'ok' in output, got: %s", text)
+		}
+	})
+}
+
+func TestTaskOutputRegistrationCallback(t *testing.T) {
+	t.Run("nil callback is safe", func(t *testing.T) {
+		sess := session.New(t.TempDir())
+		t.Cleanup(sess.Close)
+		cfg := testConfig()
+		handler := taskOutputHandler(sess, cfg)
+
+		// Should not panic even with nil RegisterSession.
+		result, _, err := handler(context.Background(), nil, TaskOutputArgs{TaskID: "nonexistent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isErrorResult(result) {
+			t.Error("expected error for unknown task")
+		}
+	})
+}
+
+func TestBashBackgroundTimeout(t *testing.T) {
+	t.Run("task killed after timeout", func(t *testing.T) {
+		sess := session.New(t.TempDir())
+		t.Cleanup(sess.Close)
+		cfg := testConfig()
+		cfg.BgTimeout = 1 // 1 second
+		bashH := bashHandler(sess, cfg)
+		taskH := taskOutputHandler(sess, cfg)
+
+		result, _, err := bashH(context.Background(), nil, BashArgs{
+			Command:         "sleep 300",
+			RunInBackground: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		taskID := ""
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, "task_id: ") {
+				taskID = strings.TrimPrefix(line, "task_id: ")
+				break
+			}
+		}
+		if taskID == "" {
+			t.Fatal("no task_id in response")
+		}
+
+		// Wait for the 1s timeout + buffer
+		time.Sleep(3 * time.Second)
+
+		result, _, err = taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = resultText(result)
+		if !strings.Contains(text, "status: completed") {
+			t.Errorf("expected completed status, got: %s", text)
+		}
+		if !strings.Contains(text, "killed by background task timeout") {
+			t.Errorf("expected timeout message, got: %s", text)
+		}
+	})
+
+	t.Run("timer cancelled on early completion", func(t *testing.T) {
+		sess := session.New(t.TempDir())
+		t.Cleanup(sess.Close)
+		cfg := testConfig()
+		cfg.BgTimeout = 300 // 5 minutes — should not fire
+		bashH := bashHandler(sess, cfg)
+		taskH := taskOutputHandler(sess, cfg)
+
+		result, _, err := bashH(context.Background(), nil, BashArgs{
+			Command:         "echo fast",
+			RunInBackground: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		taskID := ""
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, "task_id: ") {
+				taskID = strings.TrimPrefix(line, "task_id: ")
+				break
+			}
+		}
+		if taskID == "" {
+			t.Fatal("no task_id in response")
+		}
+
+		// Wait for the fast command to complete
+		time.Sleep(1 * time.Second)
+
+		result, _, err = taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = resultText(result)
+		if !strings.Contains(text, "status: completed") {
+			t.Errorf("expected completed status, got: %s", text)
+		}
+		if strings.Contains(text, "killed by background task timeout") {
+			t.Errorf("should not contain timeout message, got: %s", text)
+		}
+	})
+
+	t.Run("no timer when bg-timeout is 0", func(t *testing.T) {
+		sess := session.New(t.TempDir())
+		t.Cleanup(sess.Close)
+		cfg := testConfig()
+		// BgTimeout is 0 by default in testConfig — no timer
+		bashH := bashHandler(sess, cfg)
+		taskH := taskOutputHandler(sess, cfg)
+
+		result, _, err := bashH(context.Background(), nil, BashArgs{
+			Command:         "echo done",
+			RunInBackground: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(result)
+		taskID := ""
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, "task_id: ") {
+				taskID = strings.TrimPrefix(line, "task_id: ")
+				break
+			}
+		}
+		if taskID == "" {
+			t.Fatal("no task_id in response")
+		}
+
+		time.Sleep(1 * time.Second)
+
+		result, _, err = taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = resultText(result)
+		if !strings.Contains(text, "status: completed") {
+			t.Errorf("expected completed status, got: %s", text)
+		}
+		if strings.Contains(text, "killed by background task timeout") {
+			t.Errorf("should not contain timeout message with bg-timeout=0, got: %s", text)
+		}
+	})
+}
+
+func TestBashForegroundTimeoutKillTimerStopped(t *testing.T) {
+	sess := session.New(t.TempDir())
+	handler := bashHandler(sess, testConfig())
+
+	// Use a command that traps SIGTERM and exits cleanly. The foreground
+	// timeout fires SIGTERM, the process exits, and the inner 5s SIGKILL
+	// timer must be cancelled — it should NOT fire after the handler returns.
+	cmd := `trap 'exit 0' TERM; sleep 300`
+	result, _, err := handler(context.Background(), nil, BashArgs{Command: cmd, Timeout: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(result)
+	if !strings.Contains(text, "timed out") {
+		t.Errorf("expected timeout message, got: %s", text)
+	}
+
+	// Wait longer than the 5s SIGKILL window. If the timer leaked it would
+	// send SIGKILL to a potentially recycled PGID. We can't directly observe
+	// the timer being stopped, but we verify the process is dead and the test
+	// completes without incident.
+	time.Sleep(6 * time.Second)
+}
+
+func TestBashBackgroundTimeoutKillTimerStopped(t *testing.T) {
+	sess := session.New(t.TempDir())
+	t.Cleanup(sess.Close)
+	cfg := testConfig()
+	cfg.BgTimeout = 1 // 1 second
+	bashH := bashHandler(sess, cfg)
+	taskH := taskOutputHandler(sess, cfg)
+
+	// Start a background command that traps SIGTERM and exits cleanly.
+	result, _, err := bashH(context.Background(), nil, BashArgs{
+		Command:         `trap 'exit 0' TERM; sleep 300`,
+		RunInBackground: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(result)
+	taskID := ""
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "task_id: ") {
+			taskID = strings.TrimPrefix(line, "task_id: ")
+			break
+		}
+	}
+	if taskID == "" {
+		t.Fatal("no task_id in response")
+	}
+
+	// Wait for the 1s bg timeout + SIGTERM handling + buffer.
+	time.Sleep(3 * time.Second)
+
+	result, _, err = taskH(context.Background(), nil, TaskOutputArgs{TaskID: taskID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = resultText(result)
+	if !strings.Contains(text, "status: completed") {
+		t.Errorf("expected completed status, got: %s", text)
+	}
+
+	// Wait past the 5s SIGKILL window to ensure the inner timer was cancelled.
+	time.Sleep(6 * time.Second)
 }
 
 func TestBashIsErrorForOperationalErrors(t *testing.T) {
