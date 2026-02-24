@@ -50,14 +50,16 @@ func (t *BackgroundTask) SetTimedOut() { t.timedOut.Store(true) }
 func (t *BackgroundTask) TimedOut() bool { return t.timedOut.Load() }
 
 // Session holds per-session state including the tracked working directory,
-// a random nonce for sentinel generation, and background task tracking.
+// a random nonce for sentinel generation, background task tracking, and
+// viewed-file tracking for view-before-edit enforcement.
 type Session struct {
-	mu        sync.Mutex
-	cwd       string
-	nonce     string
-	tasks     map[string]*BackgroundTask
-	closed    bool
-	closeOnce sync.Once
+	mu          sync.Mutex
+	cwd         string
+	nonce       string
+	tasks       map[string]*BackgroundTask
+	viewedFiles map[string]struct{}
+	closed      bool
+	closeOnce   sync.Once
 }
 
 // New creates a Session with the given initial working directory.
@@ -67,9 +69,10 @@ func New(cwd string) *Session {
 		panic(fmt.Sprintf("failed to generate session nonce: %v", err))
 	}
 	return &Session{
-		cwd:   cwd,
-		nonce: hex.EncodeToString(b),
-		tasks: make(map[string]*BackgroundTask),
+		cwd:         cwd,
+		nonce:       hex.EncodeToString(b),
+		tasks:       make(map[string]*BackgroundTask),
+		viewedFiles: make(map[string]struct{}),
 	}
 }
 
@@ -95,6 +98,21 @@ func (s *Session) SetCwd(cwd string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cwd = cwd
+}
+
+// MarkViewed records a resolved file path as having been viewed in this session.
+func (s *Session) MarkViewed(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.viewedFiles[path] = struct{}{}
+}
+
+// HasViewed reports whether the given resolved file path has been viewed in this session.
+func (s *Session) HasViewed(path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.viewedFiles[path]
+	return ok
 }
 
 // AddTask stores a background task. Returns an error if the session is

@@ -19,13 +19,13 @@ type StrReplaceArgs struct {
 	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"replace all occurrences instead of requiring a unique match"`
 }
 
-func strReplaceHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[StrReplaceArgs, any] {
+func strReplaceHandler(sess *session.Session, resolver *pathscope.Resolver, cfg Config) mcp.ToolHandlerFor[StrReplaceArgs, any] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, args StrReplaceArgs) (*mcp.CallToolResult, any, error) {
-		return doStrReplace(sess, resolver, args.Path, args.OldStr, args.NewStr, args.ReplaceAll)
+		return doStrReplace(sess, resolver, cfg, args.Path, args.OldStr, args.NewStr, args.ReplaceAll)
 	}
 }
 
-func doStrReplace(sess *session.Session, resolver *pathscope.Resolver, path, oldStr, newStr string, replaceAll bool) (*mcp.CallToolResult, any, error) {
+func doStrReplace(sess *session.Session, resolver *pathscope.Resolver, cfg Config, path, oldStr, newStr string, replaceAll bool) (*mcp.CallToolResult, any, error) {
 	if oldStr == "" {
 		return toolErr(ErrInvalidInput, "old_str must not be empty")
 	}
@@ -33,6 +33,10 @@ func doStrReplace(sess *session.Session, resolver *pathscope.Resolver, path, old
 	resolved, err := resolver.Resolve(sess.Cwd(), path)
 	if err != nil {
 		return toolErr(ErrAccessDenied, "path not allowed: %v", err)
+	}
+
+	if cfg.RequireViewBeforeEdit && !sess.HasViewed(resolved) {
+		return toolErr(ErrFileNotViewed, "file %s must be viewed before editing. Use the view tool first.", resolved)
 	}
 
 	info, err := os.Stat(resolved)

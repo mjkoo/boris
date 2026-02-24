@@ -17,7 +17,7 @@ func TestCreateFileNew(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := createFileHandler(sess, resolver, 10*1024*1024)
+	handler := createFileHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    file,
@@ -44,7 +44,7 @@ func TestCreateFileOverwriteByDefault(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := createFileHandler(sess, resolver, 10*1024*1024)
+	handler := createFileHandler(sess, resolver, testConfig())
 
 	// Should overwrite without needing an explicit flag
 	result, _, err := handler(context.Background(), nil, CreateFileArgs{
@@ -70,7 +70,7 @@ func TestCreateFileParentDirs(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := createFileHandler(sess, resolver, 10*1024*1024)
+	handler := createFileHandler(sess, resolver, testConfig())
 
 	_, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    file,
@@ -92,7 +92,7 @@ func TestCreateFilePermissions(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := createFileHandler(sess, resolver, 10*1024*1024)
+	handler := createFileHandler(sess, resolver, testConfig())
 
 	_, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    file,
@@ -114,7 +114,9 @@ func TestCreateFileMaxSize(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := createFileHandler(sess, resolver, 100)
+	cfg := testConfig()
+	cfg.MaxFileSize = 100
+	handler := createFileHandler(sess, resolver, cfg)
 
 	result, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    file,
@@ -135,7 +137,7 @@ func TestCreateFilePathScoping(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
-	handler := createFileHandler(sess, resolver, 10*1024*1024)
+	handler := createFileHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, CreateFileArgs{
 		Path:    "/etc/evil.txt",
@@ -150,4 +152,94 @@ func TestCreateFilePathScoping(t *testing.T) {
 	if !hasErrorCode(result, ErrAccessDenied) {
 		t.Errorf("expected error code %s, got: %s", ErrAccessDenied, resultText(result))
 	}
+}
+
+func TestCreateFileViewBeforeEdit(t *testing.T) {
+	t.Run("overwrite rejected when file not viewed", func(t *testing.T) {
+		tmp := t.TempDir()
+		file := filepath.Join(tmp, "existing.txt")
+		os.WriteFile(file, []byte("original"), 0644)
+
+		sess := session.New(tmp)
+		resolver, _ := pathscope.NewResolver(nil, nil)
+		cfg := testConfig()
+		cfg.RequireViewBeforeEdit = true
+		handler := createFileHandler(sess, resolver, cfg)
+
+		result, _, err := handler(context.Background(), nil, CreateFileArgs{
+			Path:    file,
+			Content: "overwritten",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasErrorCode(result, ErrFileNotViewed) {
+			t.Errorf("expected error code %s, got: %s", ErrFileNotViewed, resultText(result))
+		}
+
+		// File should be unchanged
+		data, _ := os.ReadFile(file)
+		if string(data) != "original" {
+			t.Errorf("file should be unchanged, got %q", data)
+		}
+	})
+
+	t.Run("new file creation skips view check", func(t *testing.T) {
+		tmp := t.TempDir()
+		file := filepath.Join(tmp, "brand-new.txt")
+
+		sess := session.New(tmp)
+		resolver, _ := pathscope.NewResolver(nil, nil)
+		cfg := testConfig()
+		cfg.RequireViewBeforeEdit = true
+		handler := createFileHandler(sess, resolver, cfg)
+
+		result, _, err := handler(context.Background(), nil, CreateFileArgs{
+			Path:    file,
+			Content: "new content",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isErrorResult(result) {
+			t.Errorf("new file creation should succeed without view, got: %s", resultText(result))
+		}
+
+		data, _ := os.ReadFile(file)
+		if string(data) != "new content" {
+			t.Errorf("got %q, want %q", data, "new content")
+		}
+	})
+
+	t.Run("overwrite succeeds after view", func(t *testing.T) {
+		tmp := t.TempDir()
+		file := filepath.Join(tmp, "existing.txt")
+		os.WriteFile(file, []byte("original"), 0644)
+
+		sess := session.New(tmp)
+		resolver, _ := pathscope.NewResolver(nil, nil)
+		cfg := testConfig()
+		cfg.RequireViewBeforeEdit = true
+
+		// View the file first
+		viewH := viewHandler(sess, resolver, cfg)
+		viewH(context.Background(), nil, ViewArgs{Path: file})
+
+		handler := createFileHandler(sess, resolver, cfg)
+		result, _, err := handler(context.Background(), nil, CreateFileArgs{
+			Path:    file,
+			Content: "overwritten",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isErrorResult(result) {
+			t.Errorf("overwrite should succeed after view, got: %s", resultText(result))
+		}
+
+		data, _ := os.ReadFile(file)
+		if string(data) != "overwritten" {
+			t.Errorf("got %q, want %q", data, "overwritten")
+		}
+	})
 }

@@ -217,9 +217,9 @@ func runBackground(sess *session.Session, cfg Config, cwd, command string) (*mcp
 	// Optional safety-net timeout for background tasks.
 	var bgTimer *time.Timer
 	var bgKillTimer atomic.Pointer[time.Timer]
-	if cfg.BgTimeout > 0 {
+	if cfg.BackgroundTaskTimeout > 0 {
 		pgid := cmd.Process.Pid
-		bgTimer = time.AfterFunc(time.Duration(cfg.BgTimeout)*time.Second, func() {
+		bgTimer = time.AfterFunc(time.Duration(cfg.BackgroundTaskTimeout)*time.Second, func() {
 			task.SetTimedOut()
 			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			kt := time.AfterFunc(5*time.Second, func() {

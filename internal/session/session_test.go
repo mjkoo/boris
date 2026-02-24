@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -51,6 +52,51 @@ func TestSentinel(t *testing.T) {
 	if !strings.Contains(sentinel, s.Nonce()) {
 		t.Errorf("sentinel should contain nonce %q, got %q", s.Nonce(), sentinel)
 	}
+}
+
+func TestViewedFiles(t *testing.T) {
+	t.Run("mark and check", func(t *testing.T) {
+		s := New("/workspace")
+		s.MarkViewed("/workspace/src/main.go")
+		if !s.HasViewed("/workspace/src/main.go") {
+			t.Error("expected HasViewed to return true after MarkViewed")
+		}
+	})
+
+	t.Run("unviewed returns false", func(t *testing.T) {
+		s := New("/workspace")
+		if s.HasViewed("/workspace/src/main.go") {
+			t.Error("expected HasViewed to return false for unviewed file")
+		}
+	})
+
+	t.Run("per-session isolation", func(t *testing.T) {
+		a := New("/workspace")
+		b := New("/workspace")
+		a.MarkViewed("/workspace/file.go")
+		if b.HasViewed("/workspace/file.go") {
+			t.Error("session B should not see session A's viewed files")
+		}
+	})
+
+	t.Run("concurrent access", func(t *testing.T) {
+		s := New("/workspace")
+		var wg sync.WaitGroup
+		for i := 0; i < 100; i++ {
+			wg.Add(2)
+			path := fmt.Sprintf("/workspace/file%d.go", i)
+			go func() {
+				defer wg.Done()
+				s.MarkViewed(path)
+			}()
+			go func() {
+				defer wg.Done()
+				_ = s.HasViewed(path)
+			}()
+		}
+		wg.Wait()
+		// No race detector failure means success
+	})
 }
 
 func TestBackgroundTasks(t *testing.T) {

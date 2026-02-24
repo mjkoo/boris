@@ -74,9 +74,10 @@ type CLI struct {
 	DenyDir     []string    `help:"Denied directories/patterns (repeatable)." env:"BORIS_DENY_DIRS"`
 	Token           string      `help:"Bearer token for HTTP authentication." env:"BORIS_TOKEN"`
 	GenerateToken   bool        `help:"Generate a random bearer token on startup." env:"BORIS_GENERATE_TOKEN"`
-	NoBash          bool        `help:"Disable bash tool." env:"BORIS_NO_BASH"`
-	BgTimeout       int         `help:"Background task safety-net timeout in seconds (0=disabled)." default:"0" env:"BORIS_BG_TIMEOUT"`
+	DisableTools    []string    `help:"Tools to disable (repeatable)." env:"BORIS_DISABLE_TOOLS"`
+	BackgroundTaskTimeout int   `help:"Background task safety-net timeout in seconds (0=disabled)." default:"0" env:"BORIS_BACKGROUND_TASK_TIMEOUT"`
 	MaxFileSize     string      `help:"Max file size for view/create." default:"10MB" env:"BORIS_MAX_FILE_SIZE"`
+	RequireViewBeforeEdit string `help:"Require files to be viewed before editing: auto, true, false." default:"auto" enum:"auto,true,false" env:"BORIS_REQUIRE_VIEW_BEFORE_EDIT"`
 	AnthropicCompat bool        `help:"Expose combined str_replace_editor tool schema." env:"BORIS_ANTHROPIC_COMPAT"`
 	LogLevel        string      `help:"Log level: debug, info, warn, error." default:"info" enum:"debug,info,warn,error" env:"BORIS_LOG_LEVEL"`
 	LogFormat       string      `help:"Log format: text or json." default:"text" enum:"text,json" env:"BORIS_LOG_FORMAT"`
@@ -206,6 +207,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Build DisableTools set from CLI flag
+	disableTools := make(map[string]struct{}, len(cli.DisableTools))
+	for _, name := range cli.DisableTools {
+		disableTools[name] = struct{}{}
+	}
+	if err := tools.ValidateDisableTools(disableTools, cli.AnthropicCompat); err != nil {
+		slog.Error("invalid --disable-tools", "error", err)
+		os.Exit(1)
+	}
+
+	// Resolve --require-view-before-edit: "auto" → true
+	requireViewBeforeEdit := cli.RequireViewBeforeEdit == "true" || cli.RequireViewBeforeEdit == "auto"
+
 	cfg := serverConfig{
 		workdir:  workdir,
 		resolver: resolver,
@@ -214,12 +228,13 @@ func main() {
 			Version: versionInfo(),
 		},
 		toolsCfg: tools.Config{
-			NoBash:          cli.NoBash,
-			MaxFileSize:     maxFileSize,
-			DefaultTimeout:  cli.Timeout,
-			Shell:           shell,
-			AnthropicCompat: cli.AnthropicCompat,
-			BgTimeout:       cli.BgTimeout,
+			DisableTools:          disableTools,
+			MaxFileSize:           maxFileSize,
+			DefaultTimeout:        cli.Timeout,
+			Shell:                 shell,
+			AnthropicCompat:       cli.AnthropicCompat,
+			BackgroundTaskTimeout: cli.BackgroundTaskTimeout,
+			RequireViewBeforeEdit: requireViewBeforeEdit,
 		},
 	}
 

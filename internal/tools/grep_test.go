@@ -1654,7 +1654,7 @@ func TestIntegrationGrepWithNoBash(t *testing.T) {
 		MaxFileSize:    10 * 1024 * 1024,
 		DefaultTimeout: 30,
 		Shell:          "/bin/sh",
-		NoBash:         true,
+		DisableTools:   map[string]struct{}{"bash": {}},
 	})
 
 	ctx := context.Background()

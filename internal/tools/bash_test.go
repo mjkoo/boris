@@ -564,7 +564,7 @@ func TestBashBackgroundTimeout(t *testing.T) {
 		sess := session.New(t.TempDir())
 		t.Cleanup(sess.Close)
 		cfg := testConfig()
-		cfg.BgTimeout = 1 // 1 second
+		cfg.BackgroundTaskTimeout = 1 // 1 second
 		bashH := bashHandler(sess, cfg)
 		taskH := taskOutputHandler(sess, cfg)
 
@@ -607,7 +607,7 @@ func TestBashBackgroundTimeout(t *testing.T) {
 		sess := session.New(t.TempDir())
 		t.Cleanup(sess.Close)
 		cfg := testConfig()
-		cfg.BgTimeout = 300 // 5 minutes — should not fire
+		cfg.BackgroundTaskTimeout = 300 // 5 minutes — should not fire
 		bashH := bashHandler(sess, cfg)
 		taskH := taskOutputHandler(sess, cfg)
 
@@ -650,7 +650,7 @@ func TestBashBackgroundTimeout(t *testing.T) {
 		sess := session.New(t.TempDir())
 		t.Cleanup(sess.Close)
 		cfg := testConfig()
-		// BgTimeout is 0 by default in testConfig — no timer
+		// BackgroundTaskTimeout is 0 by default in testConfig — no timer
 		bashH := bashHandler(sess, cfg)
 		taskH := taskOutputHandler(sess, cfg)
 
@@ -717,7 +717,7 @@ func TestBashBackgroundTimeoutKillTimerStopped(t *testing.T) {
 	sess := session.New(t.TempDir())
 	t.Cleanup(sess.Close)
 	cfg := testConfig()
-	cfg.BgTimeout = 1 // 1 second
+	cfg.BackgroundTaskTimeout = 1 // 1 second
 	bashH := bashHandler(sess, cfg)
 	taskH := taskOutputHandler(sess, cfg)
 

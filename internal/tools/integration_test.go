@@ -373,6 +373,391 @@ func TestIntegrationRegistrationCallback(t *testing.T) {
 	}
 }
 
+func TestIntegrationAnthropicCompatViewBeforeEdit(t *testing.T) {
+	tmp := t.TempDir()
+
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "boris-test",
+		Version: "test",
+	}, nil)
+
+	sess := session.New(tmp)
+	resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
+
+	tools.RegisterAll(server, resolver, sess, tools.Config{
+		MaxFileSize:           10 * 1024 * 1024,
+		DefaultTimeout:        30,
+		Shell:                 "/bin/sh",
+		AnthropicCompat:       true,
+		RequireViewBeforeEdit: true,
+	})
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	clientSession, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	// Create a file via str_replace_editor create (new file, no view needed)
+	res, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "str_replace_editor",
+		Arguments: map[string]interface{}{
+			"command":   "create",
+			"path":      "test.txt",
+			"file_text": "hello world\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create returned error: %s", contentText(res))
+	}
+
+	// Try str_replace without viewing — should fail
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "str_replace_editor",
+		Arguments: map[string]interface{}{
+			"command": "str_replace",
+			"path":    "test.txt",
+			"old_str": "hello",
+			"new_str": "goodbye",
+		},
+	})
+	if err != nil {
+		t.Fatalf("str_replace call failed: %v", err)
+	}
+	if !res.IsError {
+		t.Error("str_replace should fail without prior view")
+	}
+	if !strings.Contains(contentText(res), "FILE_NOT_VIEWED") {
+		t.Errorf("expected FILE_NOT_VIEWED error, got: %s", contentText(res))
+	}
+
+	// View via str_replace_editor view command
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "str_replace_editor",
+		Arguments: map[string]interface{}{
+			"command": "view",
+			"path":    "test.txt",
+		},
+	})
+	if err != nil {
+		t.Fatalf("view failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("view returned error: %s", contentText(res))
+	}
+
+	// Now str_replace should succeed
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "str_replace_editor",
+		Arguments: map[string]interface{}{
+			"command": "str_replace",
+			"path":    "test.txt",
+			"old_str": "hello",
+			"new_str": "goodbye",
+		},
+	})
+	if err != nil {
+		t.Fatalf("str_replace after view failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("str_replace should succeed after view, got: %s", contentText(res))
+	}
+}
+
+func TestIntegrationViewBeforeEditFlow(t *testing.T) {
+	tmp := t.TempDir()
+
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "boris-test",
+		Version: "test",
+	}, nil)
+
+	sess := session.New(tmp)
+	t.Cleanup(sess.Close)
+	resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
+
+	tools.RegisterAll(server, resolver, sess, tools.Config{
+		MaxFileSize:           10 * 1024 * 1024,
+		DefaultTimeout:        30,
+		Shell:                 "/bin/sh",
+		RequireViewBeforeEdit: true,
+	})
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	clientSession, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	// Create a file (new file, no view needed)
+	res, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "create_file",
+		Arguments: map[string]interface{}{
+			"path":    "test.txt",
+			"content": "hello world\nfoo bar\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create_file failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create_file returned error: %s", contentText(res))
+	}
+
+	// str_replace without view — should fail
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "str_replace",
+		Arguments: map[string]interface{}{
+			"path":    "test.txt",
+			"old_str": "foo bar",
+			"new_str": "REPLACED",
+		},
+	})
+	if err != nil {
+		t.Fatalf("str_replace call failed: %v", err)
+	}
+	if !res.IsError {
+		t.Error("str_replace should fail without prior view")
+	}
+	if !strings.Contains(contentText(res), "FILE_NOT_VIEWED") {
+		t.Errorf("expected FILE_NOT_VIEWED error, got: %s", contentText(res))
+	}
+
+	// View the file
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "view",
+		Arguments: map[string]interface{}{
+			"path": "test.txt",
+		},
+	})
+	if err != nil {
+		t.Fatalf("view failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("view returned error: %s", contentText(res))
+	}
+
+	// str_replace after view — should succeed
+	res, err = clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "str_replace",
+		Arguments: map[string]interface{}{
+			"path":    "test.txt",
+			"old_str": "foo bar",
+			"new_str": "REPLACED",
+		},
+	})
+	if err != nil {
+		t.Fatalf("str_replace after view failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("str_replace should succeed after view, got: %s", contentText(res))
+	}
+}
+
+func TestIntegrationDisableTools(t *testing.T) {
+	t.Run("disable single tool", func(t *testing.T) {
+		tmp := t.TempDir()
+
+		server := mcp.NewServer(&mcp.Implementation{
+			Name:    "boris-test",
+			Version: "test",
+		}, nil)
+
+		sess := session.New(tmp)
+		t.Cleanup(sess.Close)
+		resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
+
+		tools.RegisterAll(server, resolver, sess, tools.Config{
+			MaxFileSize:    10 * 1024 * 1024,
+			DefaultTimeout: 30,
+			Shell:          "/bin/sh",
+			DisableTools:   map[string]struct{}{"bash": {}},
+		})
+
+		ctx := context.Background()
+		t1, t2 := mcp.NewInMemoryTransports()
+		if _, err := server.Connect(ctx, t1, nil); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+		clientSession, err := client.Connect(ctx, t2, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clientSession.Close()
+
+		toolList, err := clientSession.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		toolNames := make(map[string]bool)
+		for _, tool := range toolList.Tools {
+			toolNames[tool.Name] = true
+		}
+		if toolNames["bash"] {
+			t.Error("bash should be disabled")
+		}
+		if toolNames["task_output"] {
+			t.Error("task_output should be disabled when bash is disabled")
+		}
+		if !toolNames["view"] {
+			t.Error("view should still be available")
+		}
+		if !toolNames["grep"] {
+			t.Error("grep should still be available")
+		}
+	})
+
+	t.Run("disable multiple tools", func(t *testing.T) {
+		tmp := t.TempDir()
+
+		server := mcp.NewServer(&mcp.Implementation{
+			Name:    "boris-test",
+			Version: "test",
+		}, nil)
+
+		sess := session.New(tmp)
+		t.Cleanup(sess.Close)
+		resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
+
+		tools.RegisterAll(server, resolver, sess, tools.Config{
+			MaxFileSize:    10 * 1024 * 1024,
+			DefaultTimeout: 30,
+			Shell:          "/bin/sh",
+			DisableTools:   map[string]struct{}{"bash": {}, "create_file": {}},
+		})
+
+		ctx := context.Background()
+		t1, t2 := mcp.NewInMemoryTransports()
+		if _, err := server.Connect(ctx, t1, nil); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+		clientSession, err := client.Connect(ctx, t2, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clientSession.Close()
+
+		toolList, err := clientSession.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		toolNames := make(map[string]bool)
+		for _, tool := range toolList.Tools {
+			toolNames[tool.Name] = true
+		}
+		if toolNames["bash"] {
+			t.Error("bash should be disabled")
+		}
+		if toolNames["create_file"] {
+			t.Error("create_file should be disabled")
+		}
+		if !toolNames["view"] {
+			t.Error("view should still be available")
+		}
+		if !toolNames["str_replace"] {
+			t.Error("str_replace should still be available")
+		}
+	})
+
+	t.Run("anthropic-compat disable mapping", func(t *testing.T) {
+		tmp := t.TempDir()
+
+		server := mcp.NewServer(&mcp.Implementation{
+			Name:    "boris-test",
+			Version: "test",
+		}, nil)
+
+		sess := session.New(tmp)
+		t.Cleanup(sess.Close)
+		resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
+
+		tools.RegisterAll(server, resolver, sess, tools.Config{
+			MaxFileSize:     10 * 1024 * 1024,
+			DefaultTimeout:  30,
+			Shell:           "/bin/sh",
+			AnthropicCompat: true,
+			DisableTools:    map[string]struct{}{"view": {}},
+		})
+
+		ctx := context.Background()
+		t1, t2 := mcp.NewInMemoryTransports()
+		if _, err := server.Connect(ctx, t1, nil); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+		clientSession, err := client.Connect(ctx, t2, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clientSession.Close()
+
+		toolList, err := clientSession.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		toolNames := make(map[string]bool)
+		for _, tool := range toolList.Tools {
+			toolNames[tool.Name] = true
+		}
+		if toolNames["str_replace_editor"] {
+			t.Error("str_replace_editor should be disabled when view is disabled in anthropic-compat mode")
+		}
+		if !toolNames["bash"] {
+			t.Error("bash should still be available")
+		}
+	})
+
+	t.Run("unknown tool name validation", func(t *testing.T) {
+		err := tools.ValidateDisableTools(
+			map[string]struct{}{"nonexistent": {}},
+			false,
+		)
+		if err == nil {
+			t.Error("expected error for unknown tool name")
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Errorf("error should mention the unknown name, got: %v", err)
+		}
+	})
+
+	t.Run("valid tool names accepted", func(t *testing.T) {
+		err := tools.ValidateDisableTools(
+			map[string]struct{}{"bash": {}, "grep": {}},
+			false,
+		)
+		if err != nil {
+			t.Errorf("expected no error for valid tool names, got: %v", err)
+		}
+	})
+
+	t.Run("anthropic-compat accepts standard names", func(t *testing.T) {
+		err := tools.ValidateDisableTools(
+			map[string]struct{}{"view": {}},
+			true,
+		)
+		if err != nil {
+			t.Errorf("expected no error for standard name in anthropic-compat mode, got: %v", err)
+		}
+	})
+}
+
 func contentText(r *mcp.CallToolResult) string {
 	if r == nil || len(r.Content) == 0 {
 		return ""

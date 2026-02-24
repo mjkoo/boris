@@ -35,13 +35,13 @@ type ViewArgs struct {
 	ViewRange ViewRange `json:"view_range,omitempty" jsonschema:"optional line range [start end] (1-indexed)"`
 }
 
-func viewHandler(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64) mcp.ToolHandlerFor[ViewArgs, any] {
+func viewHandler(sess *session.Session, resolver *pathscope.Resolver, cfg Config) mcp.ToolHandlerFor[ViewArgs, any] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, args ViewArgs) (*mcp.CallToolResult, any, error) {
-		return doView(sess, resolver, maxFileSize, args.Path, args.ViewRange)
+		return doView(sess, resolver, cfg, args.Path, args.ViewRange)
 	}
 }
 
-func doView(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int64, path string, viewRange []int) (*mcp.CallToolResult, any, error) {
+func doView(sess *session.Session, resolver *pathscope.Resolver, cfg Config, path string, viewRange []int) (*mcp.CallToolResult, any, error) {
 	resolved, err := resolver.Resolve(sess.Cwd(), path)
 	if err != nil {
 		return toolErr(ErrAccessDenied, "path not allowed: %v", err)
@@ -65,7 +65,11 @@ func doView(sess *session.Session, resolver *pathscope.Resolver, maxFileSize int
 		}, nil, nil
 	}
 
-	return readFile(resolved, info, viewRange, maxFileSize)
+	result, extra, err := readFile(resolved, info, viewRange, cfg.MaxFileSize)
+	if err == nil && result != nil && !result.IsError {
+		sess.MarkViewed(resolved)
+	}
+	return result, extra, err
 }
 
 func readFile(path string, info os.FileInfo, viewRange []int, maxFileSize int64) (*mcp.CallToolResult, any, error) {

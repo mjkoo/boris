@@ -20,7 +20,7 @@ func TestViewEntireFile(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: file})
 	if err != nil {
@@ -46,7 +46,7 @@ func TestViewLineRange(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: file, ViewRange: []int{10, 20}})
 	if err != nil {
@@ -74,7 +74,7 @@ func TestViewRangeEndClamped(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	// End exceeds total lines — should be clamped, not error
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: file, ViewRange: []int{10, 100}})
@@ -99,7 +99,7 @@ func TestViewRangeStartExceedsTotal(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: file, ViewRange: []int{100, 200}})
 	if err != nil {
@@ -120,7 +120,7 @@ func TestViewInvalidRange(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	tests := []struct {
 		name      string
@@ -156,7 +156,7 @@ func TestViewLargeFileTruncation(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 100*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: file})
 	if err != nil {
@@ -180,7 +180,7 @@ func TestViewLineTruncation(t *testing.T) {
 
 		sess := session.New(tmp)
 		resolver, _ := pathscope.NewResolver(nil, nil)
-		handler := viewHandler(sess, resolver, 10*1024*1024)
+		handler := viewHandler(sess, resolver, testConfig())
 
 		result, _, _ := handler(context.Background(), nil, ViewArgs{Path: file})
 		text := resultText(result)
@@ -196,7 +196,7 @@ func TestViewLineTruncation(t *testing.T) {
 
 		sess := session.New(tmp)
 		resolver, _ := pathscope.NewResolver(nil, nil)
-		handler := viewHandler(sess, resolver, 10*1024*1024)
+		handler := viewHandler(sess, resolver, testConfig())
 
 		result, _, _ := handler(context.Background(), nil, ViewArgs{Path: file})
 		text := resultText(result)
@@ -213,7 +213,7 @@ func TestViewUnicodeTruncation(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 100*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	t.Run("multibyte within rune limit not truncated", func(t *testing.T) {
 		// 1000 3-byte runes = 3000 bytes but only 1000 runes — under 2000 limit
@@ -259,7 +259,7 @@ func TestViewBinaryDetection(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: file})
 	if err != nil {
@@ -275,7 +275,7 @@ func TestViewImageDetection(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	t.Run("PNG via magic bytes", func(t *testing.T) {
 		file := filepath.Join(tmp, "image.png")
@@ -404,7 +404,7 @@ func TestViewDirectoryListing(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: tmp})
 	if err != nil {
@@ -446,7 +446,7 @@ func TestViewDirectorySymlinks(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: tmp})
 	if err != nil {
@@ -466,7 +466,7 @@ func TestViewRelativePath(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: "sub/test.txt"})
 	if err != nil {
@@ -482,7 +482,7 @@ func TestViewPathScopingEnforcement(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: "/etc/hostname"})
 	if err != nil {
@@ -500,7 +500,7 @@ func TestViewFileNotFound(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 10*1024*1024)
+	handler := viewHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: filepath.Join(tmp, "nonexistent")})
 	if err != nil {
@@ -521,7 +521,9 @@ func TestViewMaxFileSize(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := viewHandler(sess, resolver, 100) // 100 byte limit
+	cfg := testConfig()
+	cfg.MaxFileSize = 100
+	handler := viewHandler(sess, resolver, cfg) // 100 byte limit
 
 	result, _, err := handler(context.Background(), nil, ViewArgs{Path: file})
 	if err != nil {

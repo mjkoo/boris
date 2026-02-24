@@ -18,7 +18,7 @@ func TestStrReplaceSuccessful(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   file,
@@ -50,7 +50,7 @@ func TestStrReplaceNotFound(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   file,
@@ -75,7 +75,7 @@ func TestStrReplaceMultipleOccurrences(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   file,
@@ -100,7 +100,7 @@ func TestStrReplaceDeletion(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	_, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   file,
@@ -123,7 +123,7 @@ func TestStrReplaceAll(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	t.Run("multiple replacements with count", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
@@ -195,7 +195,7 @@ func TestStrReplaceEmptyOldStr(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	t.Run("replace_all true", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
@@ -248,7 +248,7 @@ func TestStrReplacePreservesPermissions(t *testing.T) {
 
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	_, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   file,
@@ -269,7 +269,7 @@ func TestStrReplacePathScoping(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver([]string{tmp}, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   "/etc/hostname",
@@ -291,7 +291,7 @@ func TestStrReplaceFileNotFound(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, _ := pathscope.NewResolver(nil, nil)
-	handler := strReplaceHandler(sess, resolver)
+	handler := strReplaceHandler(sess, resolver, testConfig())
 
 	result, _, err := handler(context.Background(), nil, StrReplaceArgs{
 		Path:   filepath.Join(tmp, "nonexistent"),
@@ -307,4 +307,88 @@ func TestStrReplaceFileNotFound(t *testing.T) {
 	if !hasErrorCode(result, ErrPathNotFound) {
 		t.Errorf("expected error code %s, got: %s", ErrPathNotFound, resultText(result))
 	}
+}
+
+func TestStrReplaceViewBeforeEdit(t *testing.T) {
+	t.Run("rejected when file not viewed", func(t *testing.T) {
+		tmp := t.TempDir()
+		file := filepath.Join(tmp, "test.txt")
+		os.WriteFile(file, []byte("hello world\n"), 0644)
+
+		sess := session.New(tmp)
+		resolver, _ := pathscope.NewResolver(nil, nil)
+		cfg := testConfig()
+		cfg.RequireViewBeforeEdit = true
+		handler := strReplaceHandler(sess, resolver, cfg)
+
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:   file,
+			OldStr: "hello",
+			NewStr: "goodbye",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasErrorCode(result, ErrFileNotViewed) {
+			t.Errorf("expected error code %s, got: %s", ErrFileNotViewed, resultText(result))
+		}
+
+		// File should be unchanged
+		data, _ := os.ReadFile(file)
+		if string(data) != "hello world\n" {
+			t.Errorf("file should be unchanged, got %q", data)
+		}
+	})
+
+	t.Run("succeeds after view", func(t *testing.T) {
+		tmp := t.TempDir()
+		file := filepath.Join(tmp, "test.txt")
+		os.WriteFile(file, []byte("hello world\n"), 0644)
+
+		sess := session.New(tmp)
+		resolver, _ := pathscope.NewResolver(nil, nil)
+		cfg := testConfig()
+		cfg.RequireViewBeforeEdit = true
+
+		// View the file first
+		viewH := viewHandler(sess, resolver, cfg)
+		viewH(context.Background(), nil, ViewArgs{Path: file})
+
+		handler := strReplaceHandler(sess, resolver, cfg)
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:   file,
+			OldStr: "hello",
+			NewStr: "goodbye",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isErrorResult(result) {
+			t.Errorf("expected success after viewing, got: %s", resultText(result))
+		}
+	})
+
+	t.Run("succeeds when enforcement disabled", func(t *testing.T) {
+		tmp := t.TempDir()
+		file := filepath.Join(tmp, "test.txt")
+		os.WriteFile(file, []byte("hello world\n"), 0644)
+
+		sess := session.New(tmp)
+		resolver, _ := pathscope.NewResolver(nil, nil)
+		cfg := testConfig()
+		cfg.RequireViewBeforeEdit = false
+		handler := strReplaceHandler(sess, resolver, cfg)
+
+		result, _, err := handler(context.Background(), nil, StrReplaceArgs{
+			Path:   file,
+			OldStr: "hello",
+			NewStr: "goodbye",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isErrorResult(result) {
+			t.Errorf("expected success with enforcement disabled, got: %s", resultText(result))
+		}
+	})
 }
