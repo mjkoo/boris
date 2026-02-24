@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/mjkoo/boris/internal/pathscope"
 )
 
 func TestParseSize(t *testing.T) {
@@ -328,6 +331,67 @@ func TestGracefulShutdown(t *testing.T) {
 	if err == nil {
 		t.Error("expected connection refused after shutdown")
 	}
+}
+
+func TestBuildInstructions(t *testing.T) {
+	t.Run("workdir only", func(t *testing.T) {
+		r, err := pathscope.NewResolver(nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := buildInstructions("/workspace", r)
+		want := "Working directory: /workspace"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("workdir + allow dirs", func(t *testing.T) {
+		tmp1 := t.TempDir()
+		tmp2 := t.TempDir()
+		r, err := pathscope.NewResolver([]string{tmp1, tmp2}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := buildInstructions("/workspace", r)
+		wantPrefix := "Working directory: /workspace\nAllowed directories: "
+		if !strings.HasPrefix(got, wantPrefix) {
+			t.Errorf("got %q, want prefix %q", got, wantPrefix)
+		}
+		if strings.Contains(got, "Denied patterns") {
+			t.Error("should not contain Denied patterns line")
+		}
+	})
+
+	t.Run("workdir + deny patterns", func(t *testing.T) {
+		r, err := pathscope.NewResolver(nil, []string{"**/.env", "**/.git"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := buildInstructions("/workspace", r)
+		want := "Working directory: /workspace\nDenied patterns: **/.env, **/.git"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("all three", func(t *testing.T) {
+		tmp := t.TempDir()
+		r, err := pathscope.NewResolver([]string{tmp}, []string{"**/.env"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := buildInstructions("/workspace", r)
+		if !strings.HasPrefix(got, "Working directory: /workspace\n") {
+			t.Errorf("missing workdir line: %q", got)
+		}
+		if !strings.Contains(got, "Allowed directories: ") {
+			t.Error("missing allowed directories line")
+		}
+		if !strings.Contains(got, "Denied patterns: **/.env") {
+			t.Error("missing denied patterns line")
+		}
+	})
 }
 
 func TestParseSizeErrors(t *testing.T) {

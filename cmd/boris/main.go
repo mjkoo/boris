@@ -95,10 +95,11 @@ func (c *CLI) Validate() error {
 // The getServer factory closure captures this struct and creates
 // per-connection mcp.Server and session.Session instances.
 type serverConfig struct {
-	workdir  string
-	resolver *pathscope.Resolver
-	impl     *mcp.Implementation
-	toolsCfg tools.Config
+	workdir    string
+	resolver   *pathscope.Resolver
+	impl       *mcp.Implementation
+	toolsCfg   tools.Config
+	serverOpts *mcp.ServerOptions
 }
 
 // generateToken returns a cryptographically random 64-character hex string
@@ -153,6 +154,20 @@ func parseLogLevel(s string) (slog.Level, error) {
 	default:
 		return slog.LevelInfo, fmt.Errorf("unknown log level %q", s)
 	}
+}
+
+// buildInstructions creates the MCP server instructions string from
+// the working directory and path scoping configuration.
+func buildInstructions(workdir string, resolver *pathscope.Resolver) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Working directory: %s", workdir)
+	if dirs := resolver.AllowDirs(); len(dirs) > 0 {
+		fmt.Fprintf(&b, "\nAllowed directories: %s", strings.Join(dirs, ", "))
+	}
+	if patterns := resolver.DenyPatterns(); len(patterns) > 0 {
+		fmt.Fprintf(&b, "\nDenied patterns: %s", strings.Join(patterns, ", "))
+	}
+	return b.String()
 }
 
 func main() {
@@ -240,6 +255,9 @@ func main() {
 			BackgroundTaskTimeout: cli.BackgroundTaskTimeout,
 			RequireViewBeforeEdit: requireViewBeforeEdit,
 		},
+		serverOpts: &mcp.ServerOptions{
+			Instructions: buildInstructions(workdir, resolver),
+		},
 	}
 
 	// Resolve bearer token
@@ -305,7 +323,7 @@ func runHTTP(ctx context.Context, cfg serverConfig, port int, token string) {
 	store := &session.SessionCleanupStore{Registry: registry}
 
 	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server {
-		server := mcp.NewServer(cfg.impl, nil)
+		server := mcp.NewServer(cfg.impl, cfg.serverOpts)
 		sess := session.New(cfg.workdir)
 		toolsCfg := cfg.toolsCfg
 		toolsCfg.RegisterSession = func(sessionID string) {
@@ -347,7 +365,7 @@ func runHTTP(ctx context.Context, cfg serverConfig, port int, token string) {
 func runSTDIO(ctx context.Context, cfg serverConfig) {
 	slog.Info("boris running", "transport", "stdio")
 
-	server := mcp.NewServer(cfg.impl, nil)
+	server := mcp.NewServer(cfg.impl, cfg.serverOpts)
 	sess := session.New(cfg.workdir)
 	defer sess.Close()
 	tools.RegisterAll(server, cfg.resolver, sess, cfg.toolsCfg)

@@ -39,6 +39,16 @@ func NewResolver(allowDirs []string, denyPatterns []string) (*Resolver, error) {
 	return &Resolver{allowDirs: canonical, denyPatterns: denyPatterns}, nil
 }
 
+// AllowDirs returns the canonicalized allow directory list.
+func (r *Resolver) AllowDirs() []string {
+	return r.allowDirs
+}
+
+// DenyPatterns returns the deny pattern list.
+func (r *Resolver) DenyPatterns() []string {
+	return r.denyPatterns
+}
+
 // Resolve canonicalizes a path and checks it against allow/deny lists.
 // baseCwd is the session's current working directory, used to resolve relative paths.
 func (r *Resolver) Resolve(baseCwd string, path string) (string, error) {

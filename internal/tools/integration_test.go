@@ -758,6 +758,61 @@ func TestIntegrationDisableTools(t *testing.T) {
 	})
 }
 
+func TestIntegrationServerInstructions(t *testing.T) {
+	tmp := t.TempDir()
+
+	resolver, err := pathscope.NewResolver([]string{tmp}, []string{"**/.env"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instructions := "Working directory: " + tmp + "\nAllowed directories: " + tmp + "\nDenied patterns: **/.env"
+
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "boris-test",
+		Version: "test",
+	}, &mcp.ServerOptions{
+		Instructions: instructions,
+	})
+
+	sess := session.New(tmp)
+	t.Cleanup(sess.Close)
+	tools.RegisterAll(server, resolver, sess, tools.Config{
+		MaxFileSize:    10 * 1024 * 1024,
+		DefaultTimeout: 30,
+		Shell:          "/bin/sh",
+	})
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	clientSession, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result := clientSession.InitializeResult()
+	if result == nil {
+		t.Fatal("InitializeResult() returned nil")
+	}
+	if result.Instructions != instructions {
+		t.Errorf("instructions = %q, want %q", result.Instructions, instructions)
+	}
+	if !strings.Contains(result.Instructions, "Working directory: "+tmp) {
+		t.Error("instructions should contain working directory")
+	}
+	if !strings.Contains(result.Instructions, "Allowed directories: "+tmp) {
+		t.Error("instructions should contain allowed directories")
+	}
+	if !strings.Contains(result.Instructions, "Denied patterns: **/.env") {
+		t.Error("instructions should contain denied patterns")
+	}
+}
+
 func contentText(r *mcp.CallToolResult) string {
 	if r == nil || len(r.Content) == 0 {
 		return ""

@@ -228,6 +228,48 @@ func TestClearErrorMessages(t *testing.T) {
 	}
 }
 
+func TestAllowDirsAccessor(t *testing.T) {
+	tmp := t.TempDir()
+	r, err := NewResolver([]string{tmp}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := r.AllowDirs()
+	if len(dirs) != 1 || dirs[0] != tmp {
+		t.Errorf("AllowDirs() = %v, want [%s]", dirs, tmp)
+	}
+
+	// No allow dirs configured
+	r2, err := NewResolver(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirs := r2.AllowDirs(); len(dirs) != 0 {
+		t.Errorf("AllowDirs() = %v, want empty", dirs)
+	}
+}
+
+func TestDenyPatternsAccessor(t *testing.T) {
+	patterns := []string{"**/.env", "**/.git"}
+	r, err := NewResolver(nil, patterns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := r.DenyPatterns()
+	if len(got) != 2 || got[0] != "**/.env" || got[1] != "**/.git" {
+		t.Errorf("DenyPatterns() = %v, want %v", got, patterns)
+	}
+
+	// No deny patterns configured
+	r2, err := NewResolver(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r2.DenyPatterns(); len(got) != 0 {
+		t.Errorf("DenyPatterns() = %v, want empty", got)
+	}
+}
+
 func TestInvalidDenyPattern(t *testing.T) {
 	_, err := NewResolver(nil, []string{"[invalid"})
 	if err == nil {
