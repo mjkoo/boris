@@ -111,21 +111,21 @@ The grep tool SHALL use the following additional codes:
 - **WHEN** the grep tool receives `output_mode: "invalid"`
 - **THEN** the response is `isError: true` with code `GREP_INVALID_OUTPUT_MODE` and the message lists valid values
 
-### Requirement: Find tool error codes
-The find tool SHALL use the following additional codes:
+### Requirement: Glob tool error codes
+The glob tool SHALL use the following additional codes:
 
 | Code | Condition |
 |------|-----------|
-| `FIND_INVALID_PATTERN` | The glob pattern does not compile |
-| `FIND_INVALID_TYPE` | The `type` filter value is not recognized |
+| `GLOB_INVALID_PATTERN` | The glob pattern does not compile |
+| `GLOB_INVALID_TYPE` | The `type` filter value is not recognized |
 
 #### Scenario: Invalid glob pattern
-- **WHEN** the find tool receives a malformed glob pattern
-- **THEN** the response is `isError: true` with code `FIND_INVALID_PATTERN`
+- **WHEN** the glob tool receives a malformed glob pattern
+- **THEN** the response is `isError: true` with code `GLOB_INVALID_PATTERN`
 
 #### Scenario: Invalid type filter
-- **WHEN** the find tool receives `type: "symlink"` (not a valid value)
-- **THEN** the response is `isError: true` with code `FIND_INVALID_TYPE` and the message lists valid values
+- **WHEN** the glob tool receives `type: "symlink"` (not a valid value)
+- **THEN** the response is `isError: true` with code `GLOB_INVALID_TYPE` and the message lists valid values
 
 ### Requirement: Error messages aid LLM self-correction
 Every error message (the text after the `[CODE]` prefix) SHALL state what happened, include the relevant value (path, pattern, count), and when applicable suggest how to fix the request. Messages SHALL NOT contain raw Go error strings without context, stack traces, or internal implementation details.

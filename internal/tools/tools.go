@@ -42,10 +42,10 @@ const (
 	ErrGrepInvalidOutputMode = "GREP_INVALID_OUTPUT_MODE"
 )
 
-// Find tool codes
+// Glob tool codes
 const (
-	ErrFindInvalidPattern = "FIND_INVALID_PATTERN"
-	ErrFindInvalidType    = "FIND_INVALID_TYPE"
+	ErrGlobInvalidPattern = "GLOB_INVALID_PATTERN"
+	ErrGlobInvalidType    = "GLOB_INVALID_TYPE"
 )
 
 // typeSchemas provides custom JSON schema mappings for named types.
@@ -89,22 +89,33 @@ type Config struct {
 // RegisterAll registers all tools with the MCP server.
 func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session.Session, cfg Config) {
 	if !cfg.NoBash {
+		bashDesc := "Executes a bash command with optional timeout. The working directory persists between calls. When run_in_background is true, the command runs asynchronously and returns a task_id for later retrieval via task_output."
+		taskOutputDesc := "Retrieve output from a running or completed background bash command by task_id. Running tasks return current output with status: running. Completed tasks return final output, exit code, and are cleaned up after retrieval."
+		if cfg.AnthropicCompat {
+			bashDesc = `Executes a given bash command with optional timeout. Working directory persists between commands; shell state (everything else) does not. Timeout in milliseconds (default 120000, max 600000). Output truncated at 30000 characters.`
+
+			taskOutputDesc = `Retrieves output from a running or completed background bash command. Takes a task_id returned by a background bash command. Running tasks return current output with status: running. Completed tasks return final output, exit code, and are cleaned up after retrieval.`
+		}
+
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "bash",
-			Description: "Executes a bash command with optional timeout. The working directory persists between calls. When run_in_background is true, the command runs asynchronously and returns a task_id for later retrieval via task_output.",
+			Description: bashDesc,
 		}, bashHandler(sess, cfg))
 
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "task_output",
-			Description: "Retrieve output from a running or completed background bash command by task_id. Running tasks return current output with status: running. Completed tasks return final output, exit code, and are cleaned up after retrieval.",
+			Description: taskOutputDesc,
 		}, taskOutputHandler(sess, cfg))
 	}
 
 	// Register grep tool (always available, both modes, even with --no-bash)
 	if cfg.AnthropicCompat {
 		mcp.AddTool(server, &mcp.Tool{
-			Name:        "grep",
-			Description: "Search file contents using regex patterns. Returns matching file paths (sorted by modification time), matching lines with context, or match counts.",
+			Name: "grep",
+			Description: `Search file contents using regex patterns. Supports full regex syntax.
+- Filter files with glob parameter (e.g., "*.js", "**/*.tsx") or type parameter (e.g., "js", "py", "rust")
+- Output modes: "content" shows matching lines, "files_with_matches" shows only file paths (default), "count" shows match counts
+- Multiline matching: By default patterns match within single lines only. For cross-line patterns, use multiline: true`,
 		}, grepCompatHandler(sess, resolver, cfg.MaxFileSize))
 	} else {
 		mcp.AddTool(server, &mcp.Tool{
@@ -113,22 +124,20 @@ func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session
 		}, grepHandler(sess, resolver, cfg.MaxFileSize))
 	}
 
-	// Register find/Glob tool (always available, both modes, even with --no-bash)
+	// Register glob tool (always available, both modes, even with --no-bash)
 	if cfg.AnthropicCompat {
 		mcp.AddTool(server, &mcp.Tool{
-			Name: "Glob",
+			Name: "glob",
 			Description: `- Fast file pattern matching tool that works with any codebase size
 - Supports glob patterns like "**/*.js" or "src/**/*.ts"
 - Returns matching file paths sorted by modification time
-- Use this tool when you need to find files by name patterns
-- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead
-- You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful.`,
-		}, findCompatHandler(sess, resolver))
+- Use this tool when you need to find files by name patterns`,
+		}, globCompatHandler(sess, resolver))
 	} else {
 		mcp.AddTool(server, &mcp.Tool{
-			Name:        "find",
+			Name:        "glob",
 			Description: "Find files by glob pattern. Returns matching file paths sorted by modification time (newest first). Supports doublestar patterns, brace expansion, and character classes. Respects .gitignore and skips .git/node_modules.",
-		}, findHandler(sess, resolver))
+		}, globHandler(sess, resolver))
 	}
 
 	if cfg.AnthropicCompat {
@@ -139,8 +148,11 @@ func RegisterAll(server *mcp.Server, resolver *pathscope.Resolver, sess *session
 			panic(fmt.Sprintf("failed to build str_replace_editor schema: %v", err))
 		}
 		mcp.AddTool(server, &mcp.Tool{
-			Name:        "str_replace_editor",
-			Description: "View, create, and edit files. Use the 'command' parameter to select the operation: 'view' to read files/directories, 'str_replace' to replace text, 'create' to create or overwrite files.",
+			Name: "str_replace_editor",
+			Description: `View, create, and edit files. Commands:
+- 'view': Read a file with line numbers, or list a directory. Supports optional view_range [start, end]. Lines longer than 2000 characters are truncated.
+- 'str_replace': Replace a unique string in a file. old_str must appear exactly once unless replace_all is true. Omit new_str to delete.
+- 'create': Create a new file or overwrite an existing one. Creates parent directories as needed.`,
 			InputSchema: editorSchema,
 		}, strReplaceEditorHandler(sess, resolver, cfg.MaxFileSize))
 	} else {

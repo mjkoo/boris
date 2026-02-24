@@ -14,62 +14,62 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// FindArgs is the input schema for the find tool (normal MCP mode).
-type FindArgs struct {
+// GlobArgs is the input schema for the glob tool (normal MCP mode).
+type GlobArgs struct {
 	Pattern string `json:"pattern" jsonschema:"the glob pattern to match files against,required"`
 	Path    string `json:"path,omitempty" jsonschema:"the directory to search in (defaults to cwd)"`
 	Type    string `json:"type,omitempty" jsonschema:"filter by type: file or directory"`
 }
 
-// FindCompatArgs is the input schema for the Glob tool in --anthropic-compat mode.
-type FindCompatArgs struct {
+// GlobCompatArgs is the input schema for the glob tool in --anthropic-compat mode.
+type GlobCompatArgs struct {
 	Pattern string `json:"pattern" jsonschema:"the glob pattern to match files against,required"`
 	Path    string `json:"path,omitempty" jsonschema:"the directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided."`
 }
 
-// findParams holds the normalized parameters for find.
-type findParams struct {
+// globParams holds the normalized parameters for glob.
+type globParams struct {
 	pattern    string
 	path       string
 	filterType string // "", "file", or "directory"
 }
 
-func normalizeFindArgs(args FindArgs) findParams {
-	return findParams{
+func normalizeGlobArgs(args GlobArgs) globParams {
+	return globParams{
 		pattern:    args.Pattern,
 		path:       args.Path,
 		filterType: args.Type,
 	}
 }
 
-func normalizeFindCompatArgs(args FindCompatArgs) findParams {
-	return findParams{
+func normalizeGlobCompatArgs(args GlobCompatArgs) globParams {
+	return globParams{
 		pattern: args.Pattern,
 		path:    args.Path,
 	}
 }
 
-func findHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[FindArgs, any] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, args FindArgs) (*mcp.CallToolResult, any, error) {
-		return doFind(ctx, sess, resolver, normalizeFindArgs(args))
+func globHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[GlobArgs, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, args GlobArgs) (*mcp.CallToolResult, any, error) {
+		return doGlob(ctx, sess, resolver, normalizeGlobArgs(args))
 	}
 }
 
-func findCompatHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[FindCompatArgs, any] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, args FindCompatArgs) (*mcp.CallToolResult, any, error) {
-		return doFind(ctx, sess, resolver, normalizeFindCompatArgs(args))
+func globCompatHandler(sess *session.Session, resolver *pathscope.Resolver) mcp.ToolHandlerFor[GlobCompatArgs, any] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, args GlobCompatArgs) (*mcp.CallToolResult, any, error) {
+		return doGlob(ctx, sess, resolver, normalizeGlobCompatArgs(args))
 	}
 }
 
-const findMaxOutputChars = 30000
+const globMaxOutputChars = 30000
 
-func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Resolver, p findParams) (*mcp.CallToolResult, any, error) {
+func doGlob(ctx context.Context, sess *session.Session, resolver *pathscope.Resolver, p globParams) (*mcp.CallToolResult, any, error) {
 	// Validate pattern
 	if p.pattern == "" {
 		return toolErr(ErrInvalidInput, "pattern must not be empty")
 	}
 	if !doublestar.ValidatePattern(p.pattern) {
-		return toolErr(ErrFindInvalidPattern, "invalid glob pattern: %s", p.pattern)
+		return toolErr(ErrGlobInvalidPattern, "invalid glob pattern: %s", p.pattern)
 	}
 
 	// Validate type filter
@@ -77,7 +77,7 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 	case "", "file", "directory":
 		// valid
 	default:
-		return toolErr(ErrFindInvalidType, "invalid type %q; valid values: file, directory", p.filterType)
+		return toolErr(ErrGlobInvalidType, "invalid type %q; valid values: file, directory", p.filterType)
 	}
 
 	// Check path scoping on the search root
@@ -93,22 +93,22 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 	info, err := os.Lstat(resolvedRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return findNoFiles()
+			return globNoFiles()
 		}
 		return toolErr(ErrIO, "could not stat %s: %v", p.path, err)
 	}
 	if !info.IsDir() {
-		return findNoFiles()
+		return globNoFiles()
 	}
 
 	// Walk and collect results
-	type findResult struct {
+	type globResult struct {
 		relPath string
 		modTime int64
 	}
 
 	gi := newGitignoreStack()
-	var results []findResult
+	var results []globResult
 
 	var walkFn func(dir string) error
 	walkFn = func(dir string) error {
@@ -156,7 +156,7 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 				if targetInfo.IsDir() {
 					// Directory symlink - do NOT follow, do NOT recurse,
 					// do NOT include in results. Matches Claude Code behavior
-					// where directory symlinks are invisible to Glob.
+					// where directory symlinks are invisible to glob.
 					continue
 				}
 				// File symlink - include if it matches, don't mark as dir
@@ -171,12 +171,12 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 			if isDir {
 				// Check if directory matches pattern (for directory type filter)
 				relPath, err := filepath.Rel(resolvedRoot, entryPath)
-				if err == nil && matchesFindPattern(p.pattern, relPath, name) && (p.filterType == "" || p.filterType == "directory") {
+				if err == nil && matchesGlobPattern(p.pattern, relPath, name) && (p.filterType == "" || p.filterType == "directory") {
 					resolvedFile, err := resolver.Resolve(sess.Cwd(), entryPath)
 					if err == nil {
 						fInfo, err := os.Lstat(resolvedFile)
 						if err == nil {
-							results = append(results, findResult{
+							results = append(results, globResult{
 								relPath: relPath,
 								modTime: fInfo.ModTime().Unix(),
 							})
@@ -196,7 +196,7 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 				continue
 			}
 
-			if !matchesFindPattern(p.pattern, relPath, name) {
+			if !matchesGlobPattern(p.pattern, relPath, name) {
 				continue
 			}
 
@@ -216,7 +216,7 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 				continue
 			}
 
-			results = append(results, findResult{
+			results = append(results, globResult{
 				relPath: relPath,
 				modTime: fInfo.ModTime().Unix(),
 			})
@@ -229,7 +229,7 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 	}
 
 	if len(results) == 0 {
-		return findNoFiles()
+		return globNoFiles()
 	}
 
 	// Sort by mtime descending (newest first)
@@ -245,7 +245,7 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 		if i > 0 {
 			line = "\n" + line
 		}
-		if out.Len()+len(line) > findMaxOutputChars {
+		if out.Len()+len(line) > globMaxOutputChars {
 			truncated = true
 			break
 		}
@@ -262,15 +262,15 @@ func doFind(ctx context.Context, sess *session.Session, resolver *pathscope.Reso
 	}, nil, nil
 }
 
-func findNoFiles() (*mcp.CallToolResult, any, error) {
+func globNoFiles() (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: "No files found"}},
 	}, nil, nil
 }
 
-// matchesFindPattern checks if an entry matches the find pattern.
+// matchesGlobPattern checks if an entry matches the glob pattern.
 // It matches against both the full relative path and the base name.
-func matchesFindPattern(pattern, relPath, baseName string) bool {
+func matchesGlobPattern(pattern, relPath, baseName string) bool {
 	if matched, err := doublestar.Match(pattern, relPath); err == nil && matched {
 		return true
 	}

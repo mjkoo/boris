@@ -62,5 +62,5 @@ In HTTP mode, the bash tool handler and task_output handler SHALL register the S
 - **THEN** the session timeout fires, `EventStore.SessionClosed` finds the session in the registry, and `Session.Close()` kills the background task
 
 #### Scenario: No registration if only file tools used
-- **WHEN** an HTTP client only uses file tools (view, create, grep, find) and never calls bash
+- **WHEN** an HTTP client only uses file tools (view, create, grep, glob) and never calls bash
 - **THEN** no entry is added to the `SessionRegistry`, and session timeout simply finds no matching entry (no-op cleanup)

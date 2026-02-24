@@ -14,8 +14,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// findTestSetup creates a temp directory with a session and resolver.
-func findTestSetup(t *testing.T) (string, *session.Session, *pathscope.Resolver) {
+// globTestSetup creates a temp directory with a session and resolver.
+func globTestSetup(t *testing.T) (string, *session.Session, *pathscope.Resolver) {
 	t.Helper()
 	tmp := t.TempDir()
 	sess := session.New(tmp)
@@ -26,28 +26,28 @@ func findTestSetup(t *testing.T) (string, *session.Session, *pathscope.Resolver)
 	return tmp, sess, resolver
 }
 
-func callFind(sess *session.Session, resolver *pathscope.Resolver, args FindArgs) (*mcp.CallToolResult, error) {
-	handler := findHandler(sess, resolver)
+func callGlob(sess *session.Session, resolver *pathscope.Resolver, args GlobArgs) (*mcp.CallToolResult, error) {
+	handler := globHandler(sess, resolver)
 	r, _, err := handler(context.Background(), nil, args)
 	return r, err
 }
 
-func callFindCompat(sess *session.Session, resolver *pathscope.Resolver, args FindCompatArgs) (*mcp.CallToolResult, error) {
-	handler := findCompatHandler(sess, resolver)
+func callGlobCompat(sess *session.Session, resolver *pathscope.Resolver, args GlobCompatArgs) (*mcp.CallToolResult, error) {
+	handler := globCompatHandler(sess, resolver)
 	r, _, err := handler(context.Background(), nil, args)
 	return r, err
 }
 
 // --- 3.1: Simple extension pattern ---
 
-func TestFindSimpleExtensionPattern(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobSimpleExtensionPattern(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main"), 0644)
 	os.MkdirAll(filepath.Join(tmp, "internal", "tools"), 0755)
 	os.WriteFile(filepath.Join(tmp, "internal", "tools", "grep.go"), []byte("package tools"), 0644)
 	os.WriteFile(filepath.Join(tmp, "README.md"), []byte("# readme"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.go"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,15 +65,15 @@ func TestFindSimpleExtensionPattern(t *testing.T) {
 
 // --- 3.2: Recursive doublestar pattern ---
 
-func TestFindRecursiveDoublestarPattern(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobRecursiveDoublestarPattern(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "src"), 0755)
 	os.MkdirAll(filepath.Join(tmp, "src", "utils"), 0755)
 	os.WriteFile(filepath.Join(tmp, "src", "app.test.ts"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmp, "src", "utils", "helper.test.ts"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmp, "src", "app.ts"), []byte("code"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*.test.ts"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "**/*.test.ts"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,14 +99,14 @@ func TestFindRecursiveDoublestarPattern(t *testing.T) {
 
 // --- 3.3: Directory-scoped search via path parameter ---
 
-func TestFindDirectoryScopedSearch(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobDirectoryScopedSearch(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "internal", "tools"), 0755)
 	os.MkdirAll(filepath.Join(tmp, "cmd"), 0755)
 	os.WriteFile(filepath.Join(tmp, "internal", "tools", "grep.go"), []byte("package tools"), 0644)
 	os.WriteFile(filepath.Join(tmp, "cmd", "main.go"), []byte("package main"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{
+	r, err := callGlob(sess, resolver, GlobArgs{
 		Pattern: "*.go",
 		Path:    "internal/tools",
 	})
@@ -124,14 +124,14 @@ func TestFindDirectoryScopedSearch(t *testing.T) {
 
 // --- 3.4: Relative directory path in pattern ---
 
-func TestFindRelativeDirectoryInPattern(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobRelativeDirectoryInPattern(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "src"), 0755)
 	os.MkdirAll(filepath.Join(tmp, "docs"), 0755)
 	os.WriteFile(filepath.Join(tmp, "src", "README.md"), []byte("source"), 0644)
 	os.WriteFile(filepath.Join(tmp, "docs", "README.md"), []byte("docs"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "src/**/*.md"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "src/**/*.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,13 +146,13 @@ func TestFindRelativeDirectoryInPattern(t *testing.T) {
 
 // --- 3.5: Brace expansion and character class ---
 
-func TestFindBraceExpansion(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobBraceExpansion(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, "app.ts"), []byte("code"), 0644)
 	os.WriteFile(filepath.Join(tmp, "comp.tsx"), []byte("code"), 0644)
 	os.WriteFile(filepath.Join(tmp, "style.css"), []byte("code"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.{ts,tsx}"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.{ts,tsx}"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,13 +168,13 @@ func TestFindBraceExpansion(t *testing.T) {
 	}
 }
 
-func TestFindCharacterClass(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobCharacterClass(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, "Makefile"), []byte("all:"), 0644)
 	os.WriteFile(filepath.Join(tmp, "makefile"), []byte("all:"), 0644)
 	os.WriteFile(filepath.Join(tmp, "notmatch"), []byte("x"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "[Mm]akefile"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "[Mm]akefile"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,8 +192,8 @@ func TestFindCharacterClass(t *testing.T) {
 
 // --- 3.6: Mtime sorting ---
 
-func TestFindMtimeSorting(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobMtimeSorting(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, "old.go"), []byte("old"), 0644)
 	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	os.Chtimes(filepath.Join(tmp, "old.go"), oldTime, oldTime)
@@ -201,7 +201,7 @@ func TestFindMtimeSorting(t *testing.T) {
 	os.WriteFile(filepath.Join(tmp, "new.go"), []byte("new"), 0644)
 	// new.go has current mtime (newer)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.go"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,12 +220,12 @@ func TestFindMtimeSorting(t *testing.T) {
 
 // --- 3.7: Relative paths ---
 
-func TestFindRelativePaths(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobRelativePaths(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "sub"), 0755)
 	os.WriteFile(filepath.Join(tmp, "sub", "file.go"), []byte("package sub"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.go"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,10 +240,10 @@ func TestFindRelativePaths(t *testing.T) {
 
 // --- 3.8: No files found for zero matches ---
 
-func TestFindNoFilesFoundZeroMatches(t *testing.T) {
-	_, sess, resolver := findTestSetup(t)
+func TestGlobNoFilesFoundZeroMatches(t *testing.T) {
+	_, sess, resolver := globTestSetup(t)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.xyz"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.xyz"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,10 +258,10 @@ func TestFindNoFilesFoundZeroMatches(t *testing.T) {
 
 // --- 3.9: No files found for non-existent path ---
 
-func TestFindNoFilesFoundNonExistentPath(t *testing.T) {
-	_, sess, resolver := findTestSetup(t)
+func TestGlobNoFilesFoundNonExistentPath(t *testing.T) {
+	_, sess, resolver := globTestSetup(t)
 
-	r, err := callFind(sess, resolver, FindArgs{
+	r, err := callGlob(sess, resolver, GlobArgs{
 		Pattern: "*.go",
 		Path:    "nonexistent",
 	})
@@ -279,8 +279,8 @@ func TestFindNoFilesFoundNonExistentPath(t *testing.T) {
 
 // --- 3.10: Output truncation ---
 
-func TestFindOutputTruncation(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobOutputTruncation(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	// Create many files with long names to exceed 30k chars
 	os.MkdirAll(filepath.Join(tmp, "deep"), 0755)
 	for i := 0; i < 1500; i++ {
@@ -288,7 +288,7 @@ func TestFindOutputTruncation(t *testing.T) {
 		os.WriteFile(filepath.Join(tmp, "deep", name), []byte("x"), 0644)
 	}
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.txt"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,13 +307,13 @@ func TestFindOutputTruncation(t *testing.T) {
 
 // --- 4.1: Directory symlink NOT followed ---
 
-func TestFindDirectorySymlinkNotFollowed(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobDirectorySymlinkNotFollowed(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "real"), 0755)
 	os.WriteFile(filepath.Join(tmp, "real", "inside.go"), []byte("package real"), 0644)
 	os.Symlink(filepath.Join(tmp, "real"), filepath.Join(tmp, "linked_dir"))
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.go"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,14 +327,14 @@ func TestFindDirectorySymlinkNotFollowed(t *testing.T) {
 	}
 }
 
-func TestFindDirectorySymlinkItselfNotReturned(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobDirectorySymlinkItselfNotReturned(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "real"), 0755)
 	os.WriteFile(filepath.Join(tmp, "real", "file.txt"), []byte("content"), 0644)
 	os.Symlink(filepath.Join(tmp, "real"), filepath.Join(tmp, "linked_dir"))
 
 	// Even with **/* pattern, the directory symlink itself should not appear
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "**/*"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestFindDirectorySymlinkItselfNotReturned(t *testing.T) {
 	}
 
 	// Also verify with type=directory filter
-	r, err = callFind(sess, resolver, FindArgs{Pattern: "**/*", Type: "directory"})
+	r, err = callGlob(sess, resolver, GlobArgs{Pattern: "**/*", Type: "directory"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,12 +356,12 @@ func TestFindDirectorySymlinkItselfNotReturned(t *testing.T) {
 
 // --- 4.2: File symlink IS included ---
 
-func TestFindFileSymlinkIncluded(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobFileSymlinkIncluded(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, "real.go"), []byte("package main"), 0644)
 	os.Symlink(filepath.Join(tmp, "real.go"), filepath.Join(tmp, "link.go"))
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.go"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,12 +376,12 @@ func TestFindFileSymlinkIncluded(t *testing.T) {
 
 // --- 4.3: Broken symlink silently skipped ---
 
-func TestFindBrokenSymlinkSkipped(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobBrokenSymlinkSkipped(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, "valid.go"), []byte("package main"), 0644)
 	os.Symlink(filepath.Join(tmp, "nonexistent"), filepath.Join(tmp, "broken.go"))
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.go"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,13 +399,13 @@ func TestFindBrokenSymlinkSkipped(t *testing.T) {
 
 // --- 5.1: .git directory skipped ---
 
-func TestFindGitDirSkipped(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobGitDirSkipped(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, ".git"), 0755)
 	os.WriteFile(filepath.Join(tmp, ".git", "HEAD"), []byte("ref"), 0644)
 	os.WriteFile(filepath.Join(tmp, "src.go"), []byte("package main"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "**/*"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,13 +420,13 @@ func TestFindGitDirSkipped(t *testing.T) {
 
 // --- 5.2: node_modules directory skipped ---
 
-func TestFindNodeModulesSkipped(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobNodeModulesSkipped(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "node_modules"), 0755)
 	os.WriteFile(filepath.Join(tmp, "node_modules", "pkg.js"), []byte("module"), 0644)
 	os.WriteFile(filepath.Join(tmp, "app.js"), []byte("app"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.js"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.js"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,15 +441,15 @@ func TestFindNodeModulesSkipped(t *testing.T) {
 
 // --- 5.3: Gitignore patterns respected ---
 
-func TestFindGitignoreRespected(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobGitignoreRespected(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("*.log\ndist/\n"), 0644)
 	os.MkdirAll(filepath.Join(tmp, "dist"), 0755)
 	os.WriteFile(filepath.Join(tmp, "dist", "bundle.js"), []byte("bundled"), 0644)
 	os.WriteFile(filepath.Join(tmp, "app.log"), []byte("log"), 0644)
 	os.WriteFile(filepath.Join(tmp, "src.go"), []byte("package main"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "**/*"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,13 +467,13 @@ func TestFindGitignoreRespected(t *testing.T) {
 
 // --- 5.4: Negated gitignore pattern ---
 
-func TestFindGitignoreNegation(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobGitignoreNegation(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("*.log\n!important.log\n"), 0644)
 	os.WriteFile(filepath.Join(tmp, "app.log"), []byte("log"), 0644)
 	os.WriteFile(filepath.Join(tmp, "important.log"), []byte("important"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "*.log"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.log"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,13 +488,13 @@ func TestFindGitignoreNegation(t *testing.T) {
 
 // --- 5.5: Hidden files included ---
 
-func TestFindHiddenFilesIncluded(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobHiddenFilesIncluded(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, ".github", "workflows"), 0755)
 	os.WriteFile(filepath.Join(tmp, ".github", "workflows", "ci.yml"), []byte("on: push"), 0644)
 	os.WriteFile(filepath.Join(tmp, ".dockerignore"), []byte("node_modules"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "**/*"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestFindHiddenFilesIncluded(t *testing.T) {
 
 // --- 5.6: Path scoping: denied paths silently excluded ---
 
-func TestFindDeniedPathsExcluded(t *testing.T) {
+func TestGlobDeniedPathsExcluded(t *testing.T) {
 	tmp := t.TempDir()
 	sess := session.New(tmp)
 	resolver, err := pathscope.NewResolver([]string{tmp}, []string{"**/.env"})
@@ -520,7 +520,7 @@ func TestFindDeniedPathsExcluded(t *testing.T) {
 	os.WriteFile(filepath.Join(tmp, ".env"), []byte("SECRET=val"), 0644)
 	os.WriteFile(filepath.Join(tmp, "src.go"), []byte("package main"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "**/*"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +535,7 @@ func TestFindDeniedPathsExcluded(t *testing.T) {
 
 // --- 5.7: Path scoping: search root outside allowed dirs ---
 
-func TestFindSearchRootOutsideAllowedDirs(t *testing.T) {
+func TestGlobSearchRootOutsideAllowedDirs(t *testing.T) {
 	tmp := t.TempDir()
 	allowed := t.TempDir()
 	sess := session.New(tmp)
@@ -544,7 +544,7 @@ func TestFindSearchRootOutsideAllowedDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r, err := callFind(sess, resolver, FindArgs{
+	r, err := callGlob(sess, resolver, GlobArgs{
 		Pattern: "*.go",
 		Path:    tmp, // outside allow list
 	})
@@ -561,10 +561,10 @@ func TestFindSearchRootOutsideAllowedDirs(t *testing.T) {
 
 // --- 6.1: Empty pattern returns IsError ---
 
-func TestFindEmptyPatternError(t *testing.T) {
-	_, sess, resolver := findTestSetup(t)
+func TestGlobEmptyPatternError(t *testing.T) {
+	_, sess, resolver := globTestSetup(t)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: ""})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,30 +578,30 @@ func TestFindEmptyPatternError(t *testing.T) {
 
 // --- 6.2: Malformed pattern returns IsError ---
 
-func TestFindMalformedPatternError(t *testing.T) {
-	_, sess, resolver := findTestSetup(t)
+func TestGlobMalformedPatternError(t *testing.T) {
+	_, sess, resolver := globTestSetup(t)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "[invalid"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "[invalid"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !isErrorResult(r) {
 		t.Error("expected error for malformed pattern")
 	}
-	if !hasErrorCode(r, ErrFindInvalidPattern) {
-		t.Errorf("expected error code %s, got: %s", ErrFindInvalidPattern, resultText(r))
+	if !hasErrorCode(r, ErrGlobInvalidPattern) {
+		t.Errorf("expected error code %s, got: %s", ErrGlobInvalidPattern, resultText(r))
 	}
 }
 
 // --- 6.3: Type filter "file" returns only files ---
 
-func TestFindTypeFilterFile(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobTypeFilterFile(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "subdir"), 0755)
 	os.WriteFile(filepath.Join(tmp, "file.go"), []byte("package main"), 0644)
 	os.WriteFile(filepath.Join(tmp, "subdir", "nested.go"), []byte("package sub"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{
+	r, err := callGlob(sess, resolver, GlobArgs{
 		Pattern: "**/*",
 		Type:    "file",
 	})
@@ -626,13 +626,13 @@ func TestFindTypeFilterFile(t *testing.T) {
 
 // --- 6.4: Type filter "directory" returns only directories ---
 
-func TestFindTypeFilterDirectory(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobTypeFilterDirectory(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "subdir"), 0755)
 	os.MkdirAll(filepath.Join(tmp, "another"), 0755)
 	os.WriteFile(filepath.Join(tmp, "file.go"), []byte("package main"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{
+	r, err := callGlob(sess, resolver, GlobArgs{
 		Pattern: "**/*",
 		Type:    "directory",
 	})
@@ -653,10 +653,10 @@ func TestFindTypeFilterDirectory(t *testing.T) {
 
 // --- 6.5: Invalid type value returns IsError ---
 
-func TestFindInvalidTypeError(t *testing.T) {
-	_, sess, resolver := findTestSetup(t)
+func TestGlobInvalidTypeError(t *testing.T) {
+	_, sess, resolver := globTestSetup(t)
 
-	r, err := callFind(sess, resolver, FindArgs{
+	r, err := callGlob(sess, resolver, GlobArgs{
 		Pattern: "*.go",
 		Type:    "symlink",
 	})
@@ -666,24 +666,24 @@ func TestFindInvalidTypeError(t *testing.T) {
 	if !isErrorResult(r) {
 		t.Error("expected error for invalid type")
 	}
-	if !hasErrorCode(r, ErrFindInvalidType) {
-		t.Errorf("expected error code %s, got: %s", ErrFindInvalidType, resultText(r))
+	if !hasErrorCode(r, ErrGlobInvalidType) {
+		t.Errorf("expected error code %s, got: %s", ErrGlobInvalidType, resultText(r))
 	}
 }
 
 // --- Compat handler unit test ---
 
-func TestFindCompatHandlerProducesSameResults(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobCompatHandlerProducesSameResults(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.MkdirAll(filepath.Join(tmp, "src"), 0755)
 	os.WriteFile(filepath.Join(tmp, "src", "app.go"), []byte("package main"), 0644)
 	os.WriteFile(filepath.Join(tmp, "readme.md"), []byte("# readme"), 0644)
 
-	normalR, err := callFind(sess, resolver, FindArgs{Pattern: "*.go"})
+	normalR, err := callGlob(sess, resolver, GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	compatR, err := callFindCompat(sess, resolver, FindCompatArgs{Pattern: "*.go"})
+	compatR, err := callGlobCompat(sess, resolver, GlobCompatArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -695,9 +695,9 @@ func TestFindCompatHandlerProducesSameResults(t *testing.T) {
 	}
 }
 
-// --- 7.1: Integration test: find in default mode tool list ---
+// --- 7.1: Integration test: glob in default mode tool list ---
 
-func TestIntegrationFindInDefaultToolList(t *testing.T) {
+func TestIntegrationGlobInDefaultToolList(t *testing.T) {
 	tmp := t.TempDir()
 
 	server := mcp.NewServer(&mcp.Implementation{
@@ -735,11 +735,8 @@ func TestIntegrationFindInDefaultToolList(t *testing.T) {
 	for _, tool := range toolList.Tools {
 		toolNames[tool.Name] = true
 	}
-	if !toolNames["find"] {
-		t.Error("find tool should be in default mode tool list")
-	}
-	if toolNames["Glob"] {
-		t.Error("Glob tool should NOT be in default mode tool list")
+	if !toolNames["glob"] {
+		t.Error("glob tool should be in default mode tool list")
 	}
 }
 
@@ -784,15 +781,12 @@ func TestIntegrationGlobInCompatToolList(t *testing.T) {
 	for _, tool := range toolList.Tools {
 		toolNames[tool.Name] = true
 	}
-	if !toolNames["Glob"] {
-		t.Error("Glob tool should be in compat mode tool list")
-	}
-	if toolNames["find"] {
-		t.Error("find tool should NOT be in compat mode tool list")
+	if !toolNames["glob"] {
+		t.Error("glob tool should be in compat mode tool list")
 	}
 }
 
-// --- 7.3: Integration test: Glob schema has only pattern and path ---
+// --- 7.3: Integration test: glob schema has only pattern and path ---
 
 func TestIntegrationGlobSchemaNoType(t *testing.T) {
 	tmp := t.TempDir()
@@ -830,41 +824,41 @@ func TestIntegrationGlobSchemaNoType(t *testing.T) {
 	}
 
 	for _, tool := range toolList.Tools {
-		if tool.Name == "Glob" {
+		if tool.Name == "glob" {
 			schemaMap, ok := tool.InputSchema.(map[string]interface{})
 			if !ok {
-				t.Fatal("Glob tool should have input schema map")
+				t.Fatal("glob tool should have input schema map")
 			}
 			props, ok := schemaMap["properties"].(map[string]interface{})
 			if !ok {
-				t.Fatal("expected properties in Glob schema")
+				t.Fatal("expected properties in glob schema")
 			}
 			if _, ok := props["pattern"]; !ok {
-				t.Error("Glob schema should have 'pattern' parameter")
+				t.Error("glob schema should have 'pattern' parameter")
 			}
 			if _, ok := props["path"]; !ok {
-				t.Error("Glob schema should have 'path' parameter")
+				t.Error("glob schema should have 'path' parameter")
 			}
 			if _, ok := props["type"]; ok {
-				t.Error("Glob schema should NOT have 'type' parameter in compat mode")
+				t.Error("glob schema should NOT have 'type' parameter in compat mode")
 			}
 			return
 		}
 	}
-	t.Error("Glob tool not found in tool list")
+	t.Error("glob tool not found in tool list")
 }
 
 // --- 7.4: Gitignore anchored pattern tests ---
 
-func TestFindGitignoreAnchoredPattern(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobGitignoreAnchoredPattern(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("/build\n"), 0644)
 	os.MkdirAll(filepath.Join(tmp, "build"), 0755)
 	os.WriteFile(filepath.Join(tmp, "build", "out.txt"), []byte("x"), 0644)
 	os.MkdirAll(filepath.Join(tmp, "src", "build"), 0755)
 	os.WriteFile(filepath.Join(tmp, "src", "build", "out.txt"), []byte("x"), 0644)
 
-	r, err := callFind(sess, resolver, FindArgs{Pattern: "**/*.txt"})
+	r, err := callGlob(sess, resolver, GlobArgs{Pattern: "**/*.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -877,8 +871,8 @@ func TestFindGitignoreAnchoredPattern(t *testing.T) {
 
 // --- 7.5: Context cancellation tests ---
 
-func TestFindContextCancellationStopsWalk(t *testing.T) {
-	tmp, sess, resolver := findTestSetup(t)
+func TestGlobContextCancellationStopsWalk(t *testing.T) {
+	tmp, sess, resolver := globTestSetup(t)
 	// Create 100 directories with a file each
 	for i := 0; i < 100; i++ {
 		dir := filepath.Join(tmp, fmt.Sprintf("dir%03d", i))
@@ -890,10 +884,10 @@ func TestFindContextCancellationStopsWalk(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	handler := findHandler(sess, resolver)
+	handler := globHandler(sess, resolver)
 	done := make(chan struct{})
 	go func() {
-		handler(ctx, nil, FindArgs{Pattern: "**/*.txt"})
+		handler(ctx, nil, GlobArgs{Pattern: "**/*.txt"})
 		close(done)
 	}()
 
@@ -901,12 +895,12 @@ func TestFindContextCancellationStopsWalk(t *testing.T) {
 	case <-done:
 		// Handler returned — good
 	case <-time.After(5 * time.Second):
-		t.Fatal("find handler did not respect context cancellation within 5s")
+		t.Fatal("glob handler did not respect context cancellation within 5s")
 	}
 }
 
 // --- 7.5: Update existing integration tests ---
 // The existing integration tests in integration_test.go need updating.
 // These tests verify the new tool appears in tool lists.
-// Tests for exact tool list contents are handled by TestIntegrationFindInDefaultToolList
+// Tests for exact tool list contents are handled by TestIntegrationGlobInDefaultToolList
 // and TestIntegrationGlobInCompatToolList above.

@@ -24,7 +24,7 @@ Boris exposes the core tools that coding agents need:
 | **str_replace** | Replace a unique string in a file. The workhorse of AI code editing. |
 | **create_file** | Create or overwrite files. Creates parent directories as needed. |
 | **grep** | Search file contents with regex patterns. Multiple output modes. |
-| **find** | Find files by glob pattern. Respects `.gitignore`. |
+| **glob** | Find files by glob pattern. Respects `.gitignore`. |
 
 With `--anthropic-compat`, tools are exposed using the schemas Claude models are fine-tuned on (e.g., the combined `str_replace_editor` tool). Other models work fine with the default schemas.
 
@@ -91,7 +91,7 @@ All configuration is via CLI flags or environment variables. No config files req
 
 ### Path scoping
 
-File tools (`view`, `str_replace`, `create_file`, `grep`, `find`) enforce an allow/deny list for paths. Symlinks are resolved before checking.
+File tools (`view`, `str_replace`, `create_file`, `grep`, `glob`) enforce an allow/deny list for paths. Symlinks are resolved before checking.
 
 - **No `--allow-dir`**: all paths allowed (appropriate inside a container).
 - **With `--allow-dir`**: only paths within allowed directories are accessible.
@@ -109,6 +109,34 @@ boris --allow-dir=./src --allow-dir=./tests --no-bash
 
 - **HTTP** (default): MCP over streamable HTTP with SSE. Serves on `/mcp` with a health check at `GET /health`. Supports CORS for browser-based clients. Each MCP session gets independent state.
 - **STDIO**: MCP over stdin/stdout. The client spawns Boris as a child process. Zero-config integration with Claude Desktop, Cursor, and similar tools.
+
+## Development
+
+Common tasks are codified in the [`justfile`](justfile). Install [just](https://just.systems) to use them, or run the underlying commands directly.
+
+```bash
+just          # list available recipes
+just test     # go test -race ./...
+just vet      # go vet ./...
+just build    # go build -o boris ./cmd/boris
+just snapshot # goreleaser release --snapshot --clean
+```
+
+### Test Environment
+
+Spin up a Docker container running boris against a known copy of the boris repo, then connect Claude Code to it as the sole tool provider.
+
+**Prerequisites:** Docker, [just](https://just.systems), [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+
+```bash
+# Terminal 1: start boris in a container
+just test-env
+
+# Terminal 2: connect Claude Code (boris-only tools, no built-in tools)
+just test-claude
+```
+
+Ctrl-C in Terminal 1 stops and removes the container.
 
 ## Security
 
