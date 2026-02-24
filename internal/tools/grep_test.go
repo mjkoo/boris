@@ -1639,7 +1639,7 @@ func TestIntegrationGrepInAnthropicCompatToolList(t *testing.T) {
 	}
 }
 
-func TestIntegrationGrepWithNoBash(t *testing.T) {
+func TestIntegrationGrepWithDisabledBash(t *testing.T) {
 	tmp := t.TempDir()
 
 	server := mcp.NewServer(&mcp.Implementation{
@@ -1679,10 +1679,10 @@ func TestIntegrationGrepWithNoBash(t *testing.T) {
 		toolNames[tool.Name] = true
 	}
 	if !toolNames["grep"] {
-		t.Error("grep tool should be available with --no-bash")
+		t.Error("grep tool should be available with --disable-tools bash")
 	}
 	if toolNames["bash"] {
-		t.Error("bash tool should NOT be available with --no-bash")
+		t.Error("bash tool should NOT be available with --disable-tools bash")
 	}
 }
 

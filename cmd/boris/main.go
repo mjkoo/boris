@@ -121,14 +121,18 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 		if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			if err := json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"}); err != nil {
+				slog.Debug("failed to write auth error response", "error", err)
+			}
 			return
 		}
 		provided := auth[len(prefix):]
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			if err := json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"}); err != nil {
+				slog.Debug("failed to write auth error response", "error", err)
+			}
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -289,7 +293,9 @@ func buildMux(mcpHandler http.Handler) *http.ServeMux {
 	mux.Handle("/mcp", mcpHandler)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			slog.Debug("failed to write health response", "error", err)
+		}
 	})
 	return mux
 }

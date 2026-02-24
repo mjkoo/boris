@@ -25,6 +25,7 @@ Boris exposes the core tools that coding agents need:
 | **create_file** | Create or overwrite files. Creates parent directories as needed. |
 | **grep** | Search file contents with regex patterns. Multiple output modes. |
 | **glob** | Find files by glob pattern. Respects `.gitignore`. |
+| **task_output** | Retrieve output from background bash tasks. |
 
 With `--anthropic-compat`, tools are exposed using the schemas Claude models are fine-tuned on (e.g., the combined `str_replace_editor` tool). Other models work fine with the default schemas.
 
@@ -83,8 +84,10 @@ All configuration is via CLI flags or environment variables. No config files req
 | `--deny-dir` | `BORIS_DENY_DIRS` | (none) | Denied directories/patterns for file tools (repeatable) |
 | `--token` | `BORIS_TOKEN` | (none) | Bearer token for HTTP auth |
 | `--generate-token` | `BORIS_GENERATE_TOKEN` | `false` | Generate a random bearer token on startup |
-| `--no-bash` | `BORIS_NO_BASH` | `false` | Disable the bash tool entirely |
+| `--disable-tools` | `BORIS_DISABLE_TOOLS` | (none) | Tools to disable (repeatable, e.g. bash) |
+| `--background-task-timeout` | `BORIS_BACKGROUND_TASK_TIMEOUT` | `0` | Background task safety-net timeout in seconds (0=disabled) |
 | `--max-file-size` | `BORIS_MAX_FILE_SIZE` | `10MB` | Max file size for view/create |
+| `--require-view-before-edit` | `BORIS_REQUIRE_VIEW_BEFORE_EDIT` | `auto` | Require files to be viewed before editing: `auto`, `true`, `false` |
 | `--anthropic-compat` | `BORIS_ANTHROPIC_COMPAT` | `false` | Use Claude-compatible tool schemas |
 | `--log-level` | `BORIS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `--log-format` | `BORIS_LOG_FORMAT` | `text` | `text` or `json` |
@@ -102,7 +105,7 @@ File tools (`view`, `str_replace`, `create_file`, `grep`, `glob`) enforce an all
 boris --allow-dir=./my-project --deny-dir='**/.env' --deny-dir='**/.git'
 
 # File tools only, no shell access
-boris --allow-dir=./src --allow-dir=./tests --no-bash
+boris --allow-dir=./src --allow-dir=./tests --disable-tools bash
 ```
 
 ### Transports
@@ -148,4 +151,4 @@ Boris provides shell execution as a tool. This is powerful but inherently danger
 - File tools enforce path scoping with symlink resolution, which prevents accidental access outside allowed directories.
 - **Always use authentication** (`--token` or `--generate-token`) when Boris is network-accessible.
 - The recommended deployment is **inside a container** with only the workspace directory mounted.
-- Use `--no-bash` if you need to guarantee that only file operations are available.
+- Use `--disable-tools bash` if you need to guarantee that only file operations are available.

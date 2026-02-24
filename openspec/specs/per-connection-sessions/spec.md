@@ -53,7 +53,7 @@ Process-wide configuration (workdir initial value, shell path, path resolver, ma
 - **THEN** both clients are restricted to `/workspace` for file tool operations
 
 #### Scenario: Tool configuration consistent across sessions
-- **WHEN** boris is started with `--anthropic-compat --no-bash` and two clients connect
+- **WHEN** boris is started with `--anthropic-compat --disable-tools bash` and two clients connect
 - **THEN** both clients see the same tool set (`str_replace_editor`, `grep`, `Glob`)
 
 ### Requirement: No session management flags

@@ -72,7 +72,7 @@ All file tools (`view`, `str_replace`, `create_file`, `grep`) SHALL pass their p
 - **THEN** the file is silently skipped (no error, no result for that file)
 
 ### Requirement: Bash tool does not use the path resolver
-The `bash` tool SHALL NOT pass commands through the path resolver. Bash containment is best-effort only — the working directory is set inside an allowed directory, but shell commands can access any path. The `--no-bash` flag is the mechanism for strict file-only enforcement.
+The `bash` tool SHALL NOT pass commands through the path resolver. Bash containment is best-effort only — the working directory is set inside an allowed directory, but shell commands can access any path. The `--disable-tools bash` flag is the mechanism for strict file-only enforcement.
 
 #### Scenario: Bash can access paths outside allow list
 - **WHEN** `--allow-dir=/workspace` is set and a bash command runs `cat /etc/hostname`
